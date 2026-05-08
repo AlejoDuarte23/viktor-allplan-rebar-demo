@@ -28,9 +28,9 @@ def main():
 
     subprocess.run(
         [
-            "cmd.exe",
-            "/c",
-            f'start "" /wait "{ALLPLAN_EXE}" -o "@{pyp_target}" & exit /b %ERRORLEVEL%',
+            str(ALLPLAN_EXE),
+            "-o",
+            f"@{pyp_target}",
         ],
         cwd=str(workdir),
         check=True,
