@@ -1,0 +1,6 @@
+app_type = "simple"
+python_version = "3.12"
+worker_integrations = [
+    "python"
+]
+registered_name = "allplan-rebar-demo"
