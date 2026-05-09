@@ -12,11 +12,19 @@ STEEL_GRADE = -1
 CONCRETE_GRADE = -1
 
 
+def _log(message: str) -> None:
+    log_path = Path(__file__).with_name("execution_log.txt")
+    with log_path.open("a", encoding="utf-8") as file:
+        file.write(f"{message}\n")
+
+
 def check_allplan_version(build_ele, version: float) -> bool:
     return True
 
 
 def create_element(build_ele, doc) -> CreateElementResult:
+    _log("Rebar PythonPart execution started.")
+
     with Path(__file__).with_name("inputs.json").open("r", encoding="utf-8") as file:
         data = json.load(file)
 
@@ -25,6 +33,8 @@ def create_element(build_ele, doc) -> CreateElementResult:
     add_concrete_context(elements, data)
     add_cap_rebar(elements, data)
     add_pile_rebar(elements, data)
+
+    _log("Pile cap, piles, and rebar created in active document.")
 
     result = CreateElementResult(elements)
     result.placement_point = AllplanGeo.Point3D(0.0, 0.0, 0.0)

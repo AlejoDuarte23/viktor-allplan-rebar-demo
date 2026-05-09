@@ -1,5 +1,6 @@
 import json
 import math
+import uuid
 from pathlib import Path
 
 import viktor as vkt
@@ -37,9 +38,9 @@ class Parametrization(vkt.Parametrization):
     reinforcement.pile_hoop_spacing = vkt.NumberField("Pile hoop spacing", default=200.0, min=100.0, suffix="mm", flex=50)
 
     allplan = vkt.Section("Allplan", initially_expanded=True)
-    allplan.create = vkt.ActionButton(
-        "Create rebar in Allplan",
-        method="create_in_allplan",
+    allplan.register = vkt.ActionButton(
+        "Register rebar PythonPart in open Allplan",
+        method="register_in_open_allplan",
         longpoll=True,
         flex=100,
     )
@@ -72,8 +73,9 @@ class Controller(vkt.Controller):
             enable_sorting_and_filtering=False,
         )
 
-    def create_in_allplan(self, params, **kwargs) -> None:
+    def register_in_open_allplan(self, params, **kwargs) -> None:
         worker_input = self._worker_input(params)
+        worker_input["run_id"] = uuid.uuid4().hex
 
         files = [
             ("inputs.json", vkt.File.from_data(json.dumps(worker_input, indent=2))),
@@ -82,13 +84,16 @@ class Controller(vkt.Controller):
         ]
 
         analysis = PythonAnalysis(
-            script=vkt.File.from_path(ALLPLAN_WORKER_DIR / "run_allplan_model.py"),
+            script=vkt.File.from_path(ALLPLAN_WORKER_DIR / "register_open_allplan_part.py"),
             files=files,
+            output_filenames=["registration_result.json", "worker_log.txt"],
         )
-        vkt.progress_message("Starting Allplan rebar worker.")
-        analysis.execute(timeout=900)
+        vkt.progress_message("Registering the rebar PythonPart in the open Allplan setup.")
+        analysis.execute(timeout=300)
+        analysis.get_output_file("registration_result.json")
+        analysis.get_output_file("worker_log.txt")
 
-        vkt.UserMessage.success("Allplan command finished.")
+        vkt.UserMessage.success("PythonPart registered. Execute 'VIKTOR Rebar Worker' from the open Allplan session.")
 
     @classmethod
     def _worker_input(cls, params) -> dict:
