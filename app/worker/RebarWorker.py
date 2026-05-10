@@ -1,46 +1,131 @@
 import json
 import math
+import traceback
 from pathlib import Path
 
+import NemAll_Python_BaseElements as AllplanBaseElements
 import NemAll_Python_Geometry as AllplanGeo
 import NemAll_Python_Reinforcement as AllplanReinf
 from CreateElementResult import CreateElementResult
 from TypeCollections.ModelEleList import ModelEleList
 
 
+PROJECT_NAME = "viktor-template"
+DRAWING_FILE_NUMBER = 1
 STEEL_GRADE = -1
 CONCRETE_GRADE = -1
 
 
 def _log(message: str) -> None:
-    log_path = Path(__file__).with_name("execution_log.txt")
+    log_path = Path(__file__).with_name("worker_log.txt")
     with log_path.open("a", encoding="utf-8") as file:
         file.write(f"{message}\n")
+
+
+def _write_error(error: BaseException) -> None:
+    error_path = Path(__file__).with_name("worker_error.txt")
+    error_path.write_text(
+        "".join(traceback.format_exception(type(error), error, error.__traceback__)),
+        encoding="utf-8",
+    )
 
 
 def check_allplan_version(build_ele, version: float) -> bool:
     return True
 
 
-def create_element(build_ele, doc) -> CreateElementResult:
-    _log("Rebar PythonPart execution started.")
-
+def _load_inputs() -> dict:
     with Path(__file__).with_name("inputs.json").open("r", encoding="utf-8") as file:
-        data = json.load(file)
+        return json.load(file)
 
+
+def _open_project(doc) -> None:
+    current_project_name, host_name = AllplanBaseElements.ProjectService.GetCurrentProjectNameAndHost()
+
+    if current_project_name == PROJECT_NAME:
+        _log(f"Project '{PROJECT_NAME}' is already active.")
+        return
+
+    open_result = AllplanBaseElements.ProjectService.OpenProject(
+        doc,
+        host_name,
+        PROJECT_NAME,
+    )
+
+    _log(f"OpenProject returned: {open_result}")
+
+    if open_result not in ("Project opened", "Active project", "project opened"):
+        raise RuntimeError(
+            f"Could not open Allplan project '{PROJECT_NAME}'. "
+            f"Current project was '{current_project_name}'. "
+            f"Allplan returned: '{open_result}'."
+        )
+
+
+def _load_drawing_file(doc) -> None:
+    drawing_service = AllplanBaseElements.DrawingFileService()
+
+    drawing_service.LoadFile(
+        doc,
+        DRAWING_FILE_NUMBER,
+        AllplanBaseElements.DrawingFileLoadState.ActiveForeground,
+    )
+
+
+def create_element(build_ele, doc) -> CreateElementResult:
+    try:
+        _log("Rebar PythonPart started.")
+        data = _load_inputs()
+        run_id = data["run_id"]
+
+        done_marker = Path(__file__).with_name("worker_done.txt")
+        result_path = Path(__file__).with_name("result.json")
+
+        _log(f"Run ID: {run_id}.")
+        _log("Opening project.")
+        _open_project(doc)
+
+        _log("Project opened.")
+        _log(f"Loading drawing file {DRAWING_FILE_NUMBER}.")
+        _load_drawing_file(doc)
+
+        _log("Drawing file loaded.")
+        _log("Creating pile cap, piles, and rebar elements.")
+        elements = create_model_elements(data)
+
+        _log("Writing elements to Allplan document.")
+        AllplanBaseElements.CreateElements(
+            doc,
+            AllplanGeo.Matrix3D(),
+            elements,
+            [],
+            None,
+        )
+
+        _log("CreateElements finished.")
+        result = build_result(data, run_id)
+        result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        _log("result.json written.")
+
+        done_marker.write_text("done", encoding="utf-8")
+        _log("worker_done.txt written.")
+
+        return CreateElementResult()
+
+    except BaseException as error:
+        _log(f"Worker failed: {error}")
+        _write_error(error)
+        raise
+
+
+def create_model_elements(data: dict) -> ModelEleList:
     elements = ModelEleList()
 
     add_concrete_context(elements, data)
     add_cap_rebar(elements, data)
     add_pile_rebar(elements, data)
 
-    _log("Pile cap, piles, and rebar created in active document.")
-
-    result = CreateElementResult(elements)
-    result.placement_point = AllplanGeo.Point3D(0.0, 0.0, 0.0)
-    result.multi_placement = False
-
-    return result
+    return elements
 
 
 def add_concrete_context(elements: ModelEleList, data: dict) -> None:
@@ -177,3 +262,25 @@ def positions_between(start: float, end: float, spacing: float) -> list[float]:
 
 def point(coords: tuple[float, float, float]):
     return AllplanGeo.Point3D(coords[0], coords[1], coords[2])
+
+
+def build_result(data: dict, run_id: str) -> dict:
+    y_bars = len(positions_between(-data["cap_width"] / 2.0 + data["cover"], data["cap_width"] / 2.0 - data["cover"], data["mat_spacing"]))
+    x_bars = len(positions_between(-data["cap_length"] / 2.0 + data["cover"], data["cap_length"] / 2.0 - data["cover"], data["mat_spacing"]))
+    cap_link_count = len(positions_between(-data["cap_length"] / 2.0 + data["cover"], data["cap_length"] / 2.0 - data["cover"], data["stirrup_spacing"]))
+    pile_hoop_count = len(positions_between(-data["pile_depth"], 0.0, data["pile_hoop_spacing"]))
+
+    return {
+        "run_id": run_id,
+        "project_name": PROJECT_NAME,
+        "drawing_file_number": DRAWING_FILE_NUMBER,
+        "created": {
+            "pile_cap": 1,
+            "piles": len(data["pile_centers"]),
+            "cap_mat_bars": 2 * y_bars + 2 * x_bars,
+            "cap_links": cap_link_count,
+            "pile_vertical_bars": len(data["pile_centers"]) * data["pile_vertical_count"],
+            "pile_hoops": len(data["pile_centers"]) * pile_hoop_count,
+        },
+        "inputs": data,
+    }

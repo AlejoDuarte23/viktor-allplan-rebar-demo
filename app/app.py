@@ -38,9 +38,9 @@ class Parametrization(vkt.Parametrization):
     reinforcement.pile_hoop_spacing = vkt.NumberField("Pile hoop spacing", default=200.0, min=100.0, suffix="mm", flex=50)
 
     allplan = vkt.Section("Allplan", initially_expanded=True)
-    allplan.register = vkt.ActionButton(
-        "Register rebar PythonPart in open Allplan",
-        method="register_in_open_allplan",
+    allplan.download = vkt.DownloadButton(
+        "Download Allplan project",
+        method="download_allplan_project",
         longpoll=True,
         flex=100,
     )
@@ -73,27 +73,30 @@ class Controller(vkt.Controller):
             enable_sorting_and_filtering=False,
         )
 
-    def register_in_open_allplan(self, params, **kwargs) -> None:
+    def download_allplan_project(self, params, **kwargs):
         worker_input = self._worker_input(params)
-        worker_input["run_id"] = uuid.uuid4().hex
+        run_id = uuid.uuid4().hex
+        worker_input["run_id"] = run_id
 
         files = [
             ("inputs.json", vkt.File.from_data(json.dumps(worker_input, indent=2))),
+            ("template_project.zip", vkt.File.from_path(ALLPLAN_WORKER_DIR / "viktor-template.prj.zip")),
             ("RebarWorker.pyp", vkt.File.from_path(ALLPLAN_WORKER_DIR / "RebarWorker.pyp")),
             ("RebarWorker.py", vkt.File.from_path(ALLPLAN_WORKER_DIR / "RebarWorker.py")),
         ]
 
         analysis = PythonAnalysis(
-            script=vkt.File.from_path(ALLPLAN_WORKER_DIR / "register_open_allplan_part.py"),
+            script=vkt.File.from_path(ALLPLAN_WORKER_DIR / "run_allplan_model.py"),
             files=files,
-            output_filenames=["registration_result.json", "worker_log.txt"],
+            output_filenames=["result_project.zip", "result.json", "worker_log.txt"],
         )
-        vkt.progress_message("Registering the rebar PythonPart in the open Allplan setup.")
-        analysis.execute(timeout=300)
-        analysis.get_output_file("registration_result.json")
+        vkt.progress_message("Starting Allplan rebar worker.")
+        analysis.execute(timeout=900)
+        result_project_zip = analysis.get_output_file("result_project.zip")
+        analysis.get_output_file("result.json")
         analysis.get_output_file("worker_log.txt")
 
-        vkt.UserMessage.success("PythonPart registered. Execute 'VIKTOR Rebar Worker' from the open Allplan session.")
+        return vkt.DownloadResult(result_project_zip, f"result_project_{run_id}.zip")
 
     @classmethod
     def _worker_input(cls, params) -> dict:

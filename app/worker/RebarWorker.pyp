@@ -3,7 +3,7 @@
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
     xsi:noNamespaceSchemaLocation="https://pythonparts.allplan.com/2026/schemas/PythonPart.xsd">
     <Script>
-        <Name>ViktorOpenSession\RebarWorker.py</Name>
+        <Name>ViktorWorker\RebarWorker.py</Name>
         <Title>VIKTOR Rebar Worker</Title>
         <Version>1.0</Version>
     </Script>
