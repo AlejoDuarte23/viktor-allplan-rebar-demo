@@ -286,10 +286,9 @@ def build_result(data: dict, run_id: str) -> dict:
         "created": {
             "pile_cap": 1,
             "piles": len(data["pile_centers"]),
-            "cap_mat_bars": 2 * y_bars + 2 * x_bars,
-            "cap_links": 0,
-            "pile_vertical_bars": len(data["pile_centers"]) * data["pile_vertical_count"],
-            "pile_hoops": len(data["pile_centers"]) * pile_hoop_count,
+            "cap_visual_mat_bars": 2 * y_bars + 2 * x_bars,
+            "pile_visual_vertical_bars": len(data["pile_centers"]) * data["pile_vertical_count"],
+            "pile_visual_hoops": len(data["pile_centers"]) * pile_hoop_count,
         },
         "inputs": data,
     }

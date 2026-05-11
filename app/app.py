@@ -15,7 +15,7 @@ class Parametrization(vkt.Parametrization):
     geometry = vkt.Section("Geometry", initially_expanded=True)
     geometry.intro = vkt.Text(
         "# Pile Cap Rebar Demo\n\n"
-        "Simple reinforcement layout for a rectangular pile cap on four piles. "
+        "Visual rebar geometry layout for a rectangular pile cap on four piles. "
         "Dimensions are in millimeters."
     )
     geometry.cap_length = vkt.NumberField("Pile cap length", default=4000.0, min=1200.0, suffix="mm", flex=50)
@@ -30,8 +30,6 @@ class Parametrization(vkt.Parametrization):
     reinforcement.cover = vkt.NumberField("Concrete cover", default=50.0, min=20.0, max=150.0, suffix="mm", flex=50)
     reinforcement.mat_bar_diameter = vkt.NumberField("Mat bar diameter", default=16.0, min=8.0, suffix="mm", flex=50)
     reinforcement.mat_spacing = vkt.NumberField("Mat spacing", default=180.0, min=75.0, suffix="mm", flex=50)
-    reinforcement.stirrup_diameter = vkt.NumberField("Link diameter", default=10.0, min=6.0, suffix="mm", flex=50)
-    reinforcement.stirrup_spacing = vkt.NumberField("Link spacing", default=250.0, min=100.0, suffix="mm", flex=50)
     reinforcement.pile_vertical_diameter = vkt.NumberField("Pile vertical bar diameter", default=16.0, min=8.0, suffix="mm", flex=50)
     reinforcement.pile_vertical_count = vkt.NumberField("Vertical bars per pile", default=8, min=4, max=16, flex=50)
     reinforcement.pile_hoop_diameter = vkt.NumberField("Pile hoop diameter", default=10.0, min=6.0, suffix="mm", flex=50)
@@ -50,20 +48,20 @@ class Controller(vkt.Controller):
     label = "Pile Cap Rebar"
     parametrization = Parametrization(width=36)
 
-    @vkt.WebView("Rebar sketch", duration_guess=1)
+    @vkt.WebView("Visual rebar sketch", duration_guess=1)
     def rebar_sketch(self, params, **kwargs):
         data = self._worker_input(params)
         html = self._build_rebar_html(data)
         return vkt.WebResult(html=html)
 
-    @vkt.TableView("Bar schedule")
+    @vkt.TableView("Visual geometry schedule")
     def bar_schedule(self, params, **kwargs):
         rows = self._bar_schedule(self._worker_input(params))
         return vkt.TableResult(
             rows,
             column_headers=[
-                "Mark",
-                "Element",
+                "Item",
+                "Geometry",
                 "Diameter [mm]",
                 "Spacing / count",
                 "Quantity",
@@ -90,7 +88,7 @@ class Controller(vkt.Controller):
             files=files,
             output_filenames=["result_project.zip", "result.json", "worker_log.txt"],
         )
-        vkt.progress_message("Starting Allplan rebar worker.")
+        vkt.progress_message("Starting Allplan visual rebar worker.")
         analysis.execute(timeout=900)
         result_project_zip = analysis.get_output_file("result_project.zip")
         analysis.get_output_file("result.json")
@@ -110,8 +108,6 @@ class Controller(vkt.Controller):
             "cover": float(params.reinforcement.cover),
             "mat_bar_diameter": float(params.reinforcement.mat_bar_diameter),
             "mat_spacing": float(params.reinforcement.mat_spacing),
-            "stirrup_diameter": float(params.reinforcement.stirrup_diameter),
-            "stirrup_spacing": float(params.reinforcement.stirrup_spacing),
             "pile_vertical_diameter": float(params.reinforcement.pile_vertical_diameter),
             "pile_vertical_count": int(params.reinforcement.pile_vertical_count),
             "pile_hoop_diameter": float(params.reinforcement.pile_hoop_diameter),
@@ -134,24 +130,17 @@ class Controller(vkt.Controller):
     def _bar_schedule(cls, data: dict) -> list[list[str | int | float]]:
         clear_length = data["cap_length"] - 2.0 * data["cover"]
         clear_width = data["cap_width"] - 2.0 * data["cover"]
-        clear_height = data["cap_height"] - 2.0 * data["cover"]
-
-        bars_across_width = cls._bar_count(clear_width, data["mat_spacing"])
-        bars_across_length = cls._bar_count(clear_length, data["mat_spacing"])
-        link_count = cls._bar_count(clear_length, data["stirrup_spacing"])
+        bars_across_width = len(cls._sample_positions(cls._positions_between(clear_width, data["mat_spacing"])))
+        bars_across_length = len(cls._sample_positions(cls._positions_between(clear_length, data["mat_spacing"])))
         hoop_count = cls._bar_count(data["pile_depth"], data["pile_hoop_spacing"])
 
         hoop_diameter = data["pile_diameter"] - 2.0 * data["cover"] - data["pile_hoop_diameter"]
         hoop_length = math.pi * hoop_diameter
         pile_vertical_length = data["pile_depth"] + data["cap_height"] - data["cover"]
-        link_length = 2.0 * (clear_width + clear_height)
 
         rows = [
-            ["B1", "Bottom mat X", data["mat_bar_diameter"], f"@ {data['mat_spacing']:.0f} mm", bars_across_width, clear_length],
-            ["B2", "Bottom mat Y", data["mat_bar_diameter"], f"@ {data['mat_spacing']:.0f} mm", bars_across_length, clear_width],
-            ["T1", "Top mat X", data["mat_bar_diameter"], f"@ {data['mat_spacing']:.0f} mm", bars_across_width, clear_length],
-            ["T2", "Top mat Y", data["mat_bar_diameter"], f"@ {data['mat_spacing']:.0f} mm", bars_across_length, clear_width],
-            ["L1", "Cap links", data["stirrup_diameter"], f"@ {data['stirrup_spacing']:.0f} mm", link_count, link_length],
+            ["C1", "Cap mat X, bottom and top", data["mat_bar_diameter"], f"sampled @ {data['mat_spacing']:.0f} mm", 2 * bars_across_width, clear_length],
+            ["C2", "Cap mat Y, bottom and top", data["mat_bar_diameter"], f"sampled @ {data['mat_spacing']:.0f} mm", 2 * bars_across_length, clear_width],
             [
                 "P1",
                 "Pile verticals",
@@ -238,15 +227,16 @@ class Controller(vkt.Controller):
       <h1>Pile Cap Rebar</h1>
       <div class="meta">
         <span>Concrete cover {data["cover"]:.0f} mm</span>
+        <span>Visual geometry export</span>
         <span>Mat {data["mat_bar_diameter"]:.0f} @ {data["mat_spacing"]:.0f}</span>
-        <span>Total bar length {total_length:.1f} m</span>
+        <span>Total visual length {total_length:.1f} m</span>
       </div>
     </div>
     <svg viewBox="0 0 1120 720" role="img" aria-label="Plan and elevation rebar sketch">
       {plan}
       {elevation}
     </svg>
-    <div class="caption">Black lines show the concrete outline and main reinforcement. Dashed circles show the four piles.</div>
+    <div class="caption">Black lines show the concrete outline and visual rebar geometry. Dashed circles show the four piles.</div>
   </div>
 </body>
 </html>
@@ -268,8 +258,8 @@ class Controller(vkt.Controller):
         clear_x0 = x0 + data["cover"] * scale
         clear_y0 = y0 + data["cover"] * scale
 
-        bars_across_width = cls._bar_count(data["cap_width"] - 2.0 * data["cover"], data["mat_spacing"])
-        bars_across_length = cls._bar_count(data["cap_length"] - 2.0 * data["cover"], data["mat_spacing"])
+        bars_across_width = len(cls._sample_positions(cls._positions_between(data["cap_width"] - 2.0 * data["cover"], data["mat_spacing"])))
+        bars_across_length = len(cls._sample_positions(cls._positions_between(data["cap_length"] - 2.0 * data["cover"], data["mat_spacing"])))
 
         bar_lines = []
         for index in range(bars_across_width):
@@ -322,12 +312,6 @@ class Controller(vkt.Controller):
             y = base_y - z * scale
             cap_rebar.append(f'<line x1="{x0 + data["cover"] * scale:.2f}" y1="{y:.2f}" x2="{x0 + cap_w - data["cover"] * scale:.2f}" y2="{y:.2f}" stroke="#111" stroke-width="2"/>')
 
-        link_count = cls._bar_count(data["cap_length"] - 2.0 * data["cover"], data["stirrup_spacing"])
-        links = []
-        for index in range(link_count):
-            x = x0 + data["cover"] * scale + cls._fraction(index, link_count) * (cap_w - 2.0 * data["cover"] * scale)
-            links.append(f'<line x1="{x:.2f}" y1="{y0 + data["cover"] * scale:.2f}" x2="{x:.2f}" y2="{base_y - data["cover"] * scale:.2f}" stroke="#111" stroke-width="1"/>')
-
         pile_lines = []
         visible_piles = [data["pile_centers"][0], data["pile_centers"][1]]
         hoop_count = cls._bar_count(data["pile_depth"], data["pile_hoop_spacing"])
@@ -346,7 +330,6 @@ class Controller(vkt.Controller):
       <text x="{panel_x:.0f}" y="{panel_y:.0f}" font-size="16" font-weight="650" fill="#111">Elevation</text>
       <rect x="{x0:.2f}" y="{y0:.2f}" width="{cap_w:.2f}" height="{cap_h:.2f}" fill="#fff" stroke="#111" stroke-width="2"/>
       {''.join(cap_rebar)}
-      {''.join(links)}
       {''.join(pile_lines)}
       <line x1="{x0 + cap_w + 30.0:.2f}" y1="{y0:.2f}" x2="{x0 + cap_w + 30.0:.2f}" y2="{base_y:.2f}" stroke="#111" stroke-width="1"/>
       <text x="{x0 + cap_w + 44.0:.2f}" y="{y0 + cap_h / 2.0:.2f}" font-size="12" fill="#111">{data["cap_height"]:.0f} mm</text>
@@ -355,3 +338,18 @@ class Controller(vkt.Controller):
     @staticmethod
     def _fraction(index: int, count: int) -> float:
         return index / (count - 1) if count > 1 else 0.5
+
+    @staticmethod
+    def _positions_between(span: float, spacing: float) -> list[float]:
+        count = int(span // spacing) + 1
+        if count == 1:
+            return [span / 2.0]
+        return [index * span / (count - 1) for index in range(count)]
+
+    @staticmethod
+    def _sample_positions(values: list[float], max_count: int = 7) -> list[float]:
+        if len(values) <= max_count:
+            return values
+
+        last_index = len(values) - 1
+        return [values[round(index * last_index / (max_count - 1))] for index in range(max_count)]
