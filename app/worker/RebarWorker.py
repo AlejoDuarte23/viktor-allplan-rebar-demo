@@ -6,6 +6,7 @@ from pathlib import Path
 import NemAll_Python_BaseElements as AllplanBaseElements
 import NemAll_Python_Geometry as AllplanGeo
 import NemAll_Python_Reinforcement as AllplanReinf
+import NemAll_Python_Utility as AllplanUtil
 from CreateElementResult import CreateElementResult
 from TypeCollections.ModelEleList import ModelEleList
 
@@ -234,7 +235,7 @@ def closed_bar(position: int, diameter: float, points: list[tuple[float, float, 
     for coords in points:
         polyline += point(coords)
 
-    rollers = AllplanGeo.VecDoubleList([0.0] * (len(points) - 1))
+    rollers = AllplanUtil.VecDoubleList([0.0] * (len(points) - 1))
     shape = AllplanReinf.BendingShape(
         polyline,
         rollers,

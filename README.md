@@ -7,3 +7,7 @@ The app keeps the flow intentionally small:
 - Review a clean 2D rebar sketch in a WebView.
 - Review a calculated bar schedule in a TableView.
 - Send the same parameters to an Allplan PythonPart worker.
+
+![VIKTOR app](assets/viktor-app.png)
+
+![Allplan results](assets/allplan-results.png)
