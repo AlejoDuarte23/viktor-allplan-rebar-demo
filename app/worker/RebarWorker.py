@@ -127,6 +127,7 @@ def create_element(build_ele, doc) -> CreateElementResult:
 def create_concrete_elements(data: dict) -> ModelEleList:
     elements = ModelEleList()
     add_concrete_context(elements, data)
+    add_cap_rebar_visual(elements, data)
     return elements
 
 
@@ -134,7 +135,6 @@ def create_rebar_elements(data: dict) -> ModelEleList:
     elements = ModelEleList()
     counter = {"position": 100}
 
-    add_cap_rebar(elements, data, counter)
     add_pile_rebar(elements, data, counter)
 
     return elements
@@ -170,7 +170,7 @@ def add_concrete_context(elements: ModelEleList, data: dict) -> None:
         )
 
 
-def add_cap_rebar(elements: ModelEleList, data: dict, counter: dict[str, int]) -> None:
+def add_cap_rebar_visual(elements: ModelEleList, data: dict) -> None:
     cover = data["cover"]
     x_min = -data["cap_length"] / 2.0 + cover
     x_max = data["cap_length"] / 2.0 - cover
@@ -181,24 +181,33 @@ def add_cap_rebar(elements: ModelEleList, data: dict, counter: dict[str, int]) -
 
     y_positions = positions_between(y_min, y_max, data["mat_spacing"])
     x_positions = positions_between(x_min, x_max, data["mat_spacing"])
+    radius = data["mat_bar_diameter"] / 2.0
 
-    for y in y_positions:
-        elements.append(straight_bar(next_position(counter), data["mat_bar_diameter"], (x_min, y, z_bottom), (x_max, y, z_bottom)))
-        elements.append(straight_bar(next_position(counter), data["mat_bar_diameter"], (x_min, y, z_top), (x_max, y, z_top)))
+    for y in sample_positions(y_positions):
+        append_cylinder_x(elements, radius, x_min, x_max, y, z_bottom)
+        append_cylinder_x(elements, radius, x_min, x_max, y, z_top)
 
-    for x in x_positions:
-        elements.append(straight_bar(next_position(counter), data["mat_bar_diameter"], (x, y_min, z_bottom), (x, y_max, z_bottom)))
-        elements.append(straight_bar(next_position(counter), data["mat_bar_diameter"], (x, y_min, z_top), (x, y_max, z_top)))
+    for x in sample_positions(x_positions):
+        append_cylinder_y(elements, radius, x, y_min, y_max, z_bottom)
+        append_cylinder_y(elements, radius, x, y_min, y_max, z_top)
 
-    for x in positions_between(x_min, x_max, data["stirrup_spacing"]):
-        points = [
-            (x, y_min, z_bottom),
-            (x, y_max, z_bottom),
-            (x, y_max, z_top),
-            (x, y_min, z_top),
-            (x, y_min, z_bottom),
-        ]
-        append_closed_bar_segments(elements, counter, data["stirrup_diameter"], points)
+
+def append_cylinder_x(elements: ModelEleList, radius: float, x_min: float, x_max: float, y: float, z: float) -> None:
+    placement = AllplanGeo.AxisPlacement3D(
+        AllplanGeo.Point3D(x_min, y, z),
+        AllplanGeo.Vector3D(0.0, 1.0, 0.0),
+        AllplanGeo.Vector3D(1.0, 0.0, 0.0),
+    )
+    elements.append_geometry_3d(AllplanGeo.BRep3D.CreateCylinder(placement, radius, x_max - x_min))
+
+
+def append_cylinder_y(elements: ModelEleList, radius: float, x: float, y_min: float, y_max: float, z: float) -> None:
+    placement = AllplanGeo.AxisPlacement3D(
+        AllplanGeo.Point3D(x, y_min, z),
+        AllplanGeo.Vector3D(1.0, 0.0, 0.0),
+        AllplanGeo.Vector3D(0.0, 1.0, 0.0),
+    )
+    elements.append_geometry_3d(AllplanGeo.BRep3D.CreateCylinder(placement, radius, y_max - y_min))
 
 
 def add_pile_rebar(elements: ModelEleList, data: dict, counter: dict[str, int]) -> None:
@@ -258,14 +267,21 @@ def positions_between(start: float, end: float, spacing: float) -> list[float]:
     return [start + index * (end - start) / (count - 1) for index in range(count)]
 
 
+def sample_positions(values: list[float], max_count: int = 7) -> list[float]:
+    if len(values) <= max_count:
+        return values
+
+    last_index = len(values) - 1
+    return [values[round(index * last_index / (max_count - 1))] for index in range(max_count)]
+
+
 def point(coords: tuple[float, float, float]):
     return AllplanGeo.Point3D(coords[0], coords[1], coords[2])
 
 
 def build_result(data: dict, run_id: str) -> dict:
-    y_bars = len(positions_between(-data["cap_width"] / 2.0 + data["cover"], data["cap_width"] / 2.0 - data["cover"], data["mat_spacing"]))
-    x_bars = len(positions_between(-data["cap_length"] / 2.0 + data["cover"], data["cap_length"] / 2.0 - data["cover"], data["mat_spacing"]))
-    cap_link_count = len(positions_between(-data["cap_length"] / 2.0 + data["cover"], data["cap_length"] / 2.0 - data["cover"], data["stirrup_spacing"]))
+    y_bars = len(sample_positions(positions_between(-data["cap_width"] / 2.0 + data["cover"], data["cap_width"] / 2.0 - data["cover"], data["mat_spacing"])))
+    x_bars = len(sample_positions(positions_between(-data["cap_length"] / 2.0 + data["cover"], data["cap_length"] / 2.0 - data["cover"], data["mat_spacing"])))
     pile_hoop_count = len(positions_between(-data["pile_depth"], 0.0, data["pile_hoop_spacing"]))
 
     return {
@@ -276,7 +292,7 @@ def build_result(data: dict, run_id: str) -> dict:
             "pile_cap": 1,
             "piles": len(data["pile_centers"]),
             "cap_mat_bars": 2 * y_bars + 2 * x_bars,
-            "cap_links": cap_link_count,
+            "cap_links": 0,
             "pile_vertical_bars": len(data["pile_centers"]) * data["pile_vertical_count"],
             "pile_hoops": len(data["pile_centers"]) * pile_hoop_count,
         },
