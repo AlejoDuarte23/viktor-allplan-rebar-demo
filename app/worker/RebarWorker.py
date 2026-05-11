@@ -6,7 +6,6 @@ from pathlib import Path
 import NemAll_Python_BaseElements as AllplanBaseElements
 import NemAll_Python_Geometry as AllplanGeo
 import NemAll_Python_Reinforcement as AllplanReinf
-import NemAll_Python_Utility as AllplanUtil
 from CreateElementResult import CreateElementResult
 from TypeCollections.ModelEleList import ModelEleList
 
@@ -187,7 +186,7 @@ def add_cap_rebar(elements: ModelEleList, data: dict) -> None:
             (x, y_min, z_top),
             (x, y_min, z_bottom),
         ]
-        elements.append(closed_bar(301, data["stirrup_diameter"], points))
+        append_closed_bar_segments(elements, 301, data["stirrup_diameter"], points)
 
 
 def add_pile_rebar(elements: ModelEleList, data: dict) -> None:
@@ -206,7 +205,7 @@ def add_pile_rebar(elements: ModelEleList, data: dict) -> None:
             elements.append(straight_bar(401, data["pile_vertical_diameter"], (x, y, z_min), (x, y, z_max)))
 
         for z in positions_between(z_min, 0.0, data["pile_hoop_spacing"]):
-            elements.append(pile_hoop(402, data["pile_hoop_diameter"], cx, cy, radius, z))
+            append_pile_hoop(elements, 402, data["pile_hoop_diameter"], cx, cy, radius, z)
 
 
 def straight_bar(position: int, diameter: float, start: tuple[float, float, float], end: tuple[float, float, float]):
@@ -221,37 +220,18 @@ def straight_bar(position: int, diameter: float, start: tuple[float, float, floa
     )
 
 
-def pile_hoop(position: int, diameter: float, cx: float, cy: float, radius: float, z: float):
+def append_pile_hoop(elements: ModelEleList, position: int, diameter: float, cx: float, cy: float, radius: float, z: float) -> None:
     segments = 20
     points = []
     for index in range(segments + 1):
         angle = 2.0 * math.pi * index / segments
         points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle), z))
-    return closed_bar(position, diameter, points)
+    append_closed_bar_segments(elements, position, diameter, points)
 
 
-def closed_bar(position: int, diameter: float, points: list[tuple[float, float, float]]):
-    polyline = AllplanGeo.Polyline3D()
-    for coords in points:
-        polyline += point(coords)
-
-    rollers = AllplanUtil.VecDoubleList([0.0] * (len(points) - 1))
-    shape = AllplanReinf.BendingShape(
-        polyline,
-        rollers,
-        diameter,
-        STEEL_GRADE,
-        CONCRETE_GRADE,
-        AllplanReinf.BendingShapeType.eH1,
-    )
-    return AllplanReinf.BarPlacement(
-        position,
-        1,
-        AllplanGeo.Vector3D(0.0, 0.0, 0.0),
-        point(points[0]),
-        point(points[0]),
-        shape,
-    )
+def append_closed_bar_segments(elements: ModelEleList, position: int, diameter: float, points: list[tuple[float, float, float]]) -> None:
+    for start, end in zip(points, points[1:]):
+        elements.append(straight_bar(position, diameter, start, end))
 
 
 def positions_between(start: float, end: float, spacing: float) -> list[float]:
