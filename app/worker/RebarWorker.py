@@ -90,20 +90,22 @@ def create_element(build_ele, doc) -> CreateElementResult:
         _load_drawing_file(doc)
 
         _log("Drawing file loaded.")
-        _log("Creating pile cap, piles, and rebar elements.")
-        elements = create_model_elements(data)
+        _log("Creating pile cap and pile concrete elements.")
+        concrete_elements = create_concrete_elements(data)
 
-        _log("Writing elements to Allplan document.")
+        _log("Writing concrete elements to Allplan document.")
         AllplanBaseElements.CreateElements(
             doc,
             AllplanGeo.Matrix3D(),
-            elements,
+            concrete_elements,
             [],
             None,
-            False,
         )
 
-        _log("CreateElements finished.")
+        _log("Concrete CreateElements finished.")
+        _log("Creating reinforcement elements for CreateElementResult.")
+        rebar_elements = create_rebar_elements(data)
+
         result = build_result(data, run_id)
         result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
         _log("result.json written.")
@@ -111,7 +113,10 @@ def create_element(build_ele, doc) -> CreateElementResult:
         done_marker.write_text("done", encoding="utf-8")
         _log("worker_done.txt written.")
 
-        return CreateElementResult()
+        create_result = CreateElementResult(rebar_elements)
+        create_result.placement_point = AllplanGeo.Point3D(0.0, 0.0, 0.0)
+        create_result.multi_placement = False
+        return create_result
 
     except BaseException as error:
         _log(f"Worker failed: {error}")
@@ -119,12 +124,18 @@ def create_element(build_ele, doc) -> CreateElementResult:
         raise
 
 
-def create_model_elements(data: dict) -> ModelEleList:
+def create_concrete_elements(data: dict) -> ModelEleList:
     elements = ModelEleList()
-
     add_concrete_context(elements, data)
-    add_cap_rebar(elements, data)
-    add_pile_rebar(elements, data)
+    return elements
+
+
+def create_rebar_elements(data: dict) -> ModelEleList:
+    elements = ModelEleList()
+    counter = {"position": 100}
+
+    add_cap_rebar(elements, data, counter)
+    add_pile_rebar(elements, data, counter)
 
     return elements
 
@@ -159,7 +170,7 @@ def add_concrete_context(elements: ModelEleList, data: dict) -> None:
         )
 
 
-def add_cap_rebar(elements: ModelEleList, data: dict) -> None:
+def add_cap_rebar(elements: ModelEleList, data: dict, counter: dict[str, int]) -> None:
     cover = data["cover"]
     x_min = -data["cap_length"] / 2.0 + cover
     x_max = data["cap_length"] / 2.0 - cover
@@ -172,12 +183,12 @@ def add_cap_rebar(elements: ModelEleList, data: dict) -> None:
     x_positions = positions_between(x_min, x_max, data["mat_spacing"])
 
     for y in y_positions:
-        elements.append(straight_bar(101, data["mat_bar_diameter"], (x_min, y, z_bottom), (x_max, y, z_bottom)))
-        elements.append(straight_bar(201, data["mat_bar_diameter"], (x_min, y, z_top), (x_max, y, z_top)))
+        elements.append(straight_bar(next_position(counter), data["mat_bar_diameter"], (x_min, y, z_bottom), (x_max, y, z_bottom)))
+        elements.append(straight_bar(next_position(counter), data["mat_bar_diameter"], (x_min, y, z_top), (x_max, y, z_top)))
 
     for x in x_positions:
-        elements.append(straight_bar(102, data["mat_bar_diameter"], (x, y_min, z_bottom), (x, y_max, z_bottom)))
-        elements.append(straight_bar(202, data["mat_bar_diameter"], (x, y_min, z_top), (x, y_max, z_top)))
+        elements.append(straight_bar(next_position(counter), data["mat_bar_diameter"], (x, y_min, z_bottom), (x, y_max, z_bottom)))
+        elements.append(straight_bar(next_position(counter), data["mat_bar_diameter"], (x, y_min, z_top), (x, y_max, z_top)))
 
     for x in positions_between(x_min, x_max, data["stirrup_spacing"]):
         points = [
@@ -187,10 +198,10 @@ def add_cap_rebar(elements: ModelEleList, data: dict) -> None:
             (x, y_min, z_top),
             (x, y_min, z_bottom),
         ]
-        append_closed_bar_segments(elements, 301, data["stirrup_diameter"], points)
+        append_closed_bar_segments(elements, counter, data["stirrup_diameter"], points)
 
 
-def add_pile_rebar(elements: ModelEleList, data: dict) -> None:
+def add_pile_rebar(elements: ModelEleList, data: dict, counter: dict[str, int]) -> None:
     radius = data["pile_diameter"] / 2.0 - data["cover"]
     z_min = -data["pile_depth"]
     z_max = data["cap_height"] - data["cover"]
@@ -203,10 +214,10 @@ def add_pile_rebar(elements: ModelEleList, data: dict) -> None:
             angle = 2.0 * math.pi * index / data["pile_vertical_count"]
             x = cx + radius * math.cos(angle)
             y = cy + radius * math.sin(angle)
-            elements.append(straight_bar(401, data["pile_vertical_diameter"], (x, y, z_min), (x, y, z_max)))
+            elements.append(straight_bar(next_position(counter), data["pile_vertical_diameter"], (x, y, z_min), (x, y, z_max)))
 
         for z in positions_between(z_min, 0.0, data["pile_hoop_spacing"]):
-            append_pile_hoop(elements, 402, data["pile_hoop_diameter"], cx, cy, radius, z)
+            append_pile_hoop(elements, counter, data["pile_hoop_diameter"], cx, cy, radius, z)
 
 
 def straight_bar(position: int, diameter: float, start: tuple[float, float, float], end: tuple[float, float, float]):
@@ -221,18 +232,23 @@ def straight_bar(position: int, diameter: float, start: tuple[float, float, floa
     )
 
 
-def append_pile_hoop(elements: ModelEleList, position: int, diameter: float, cx: float, cy: float, radius: float, z: float) -> None:
+def append_pile_hoop(elements: ModelEleList, counter: dict[str, int], diameter: float, cx: float, cy: float, radius: float, z: float) -> None:
     segments = 20
     points = []
     for index in range(segments + 1):
         angle = 2.0 * math.pi * index / segments
         points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle), z))
-    append_closed_bar_segments(elements, position, diameter, points)
+    append_closed_bar_segments(elements, counter, diameter, points)
 
 
-def append_closed_bar_segments(elements: ModelEleList, position: int, diameter: float, points: list[tuple[float, float, float]]) -> None:
+def append_closed_bar_segments(elements: ModelEleList, counter: dict[str, int], diameter: float, points: list[tuple[float, float, float]]) -> None:
     for start, end in zip(points, points[1:]):
-        elements.append(straight_bar(position, diameter, start, end))
+        elements.append(straight_bar(next_position(counter), diameter, start, end))
+
+
+def next_position(counter: dict[str, int]) -> int:
+    counter["position"] += 1
+    return counter["position"]
 
 
 def positions_between(start: float, end: float, spacing: float) -> list[float]:

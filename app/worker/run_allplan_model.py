@@ -122,6 +122,8 @@ def main() -> None:
 
     log(output_log, "worker_done.txt detected.")
     log(output_log, f"Allplan process state after marker: {process.poll()}.")
+    time.sleep(5)
+    log(output_log, "Waited 5 seconds for Allplan to finish creating returned reinforcement elements.")
     shutil.copy2(result_source, output_json)
     log(output_log, "Copied result.json back to worker output folder.")
 
