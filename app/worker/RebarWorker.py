@@ -5,15 +5,12 @@ from pathlib import Path
 
 import NemAll_Python_BaseElements as AllplanBaseElements
 import NemAll_Python_Geometry as AllplanGeo
-import NemAll_Python_Reinforcement as AllplanReinf
 from CreateElementResult import CreateElementResult
 from TypeCollections.ModelEleList import ModelEleList
 
 
 PROJECT_NAME = "viktor-template"
 DRAWING_FILE_NUMBER = 1
-STEEL_GRADE = -1
-CONCRETE_GRADE = -1
 
 
 def _log(message: str) -> None:
@@ -90,21 +87,19 @@ def create_element(build_ele, doc) -> CreateElementResult:
         _load_drawing_file(doc)
 
         _log("Drawing file loaded.")
-        _log("Creating pile cap and pile concrete elements.")
-        concrete_elements = create_concrete_elements(data)
+        _log("Creating pile cap, piles, and visual rebar geometry.")
+        model_elements = create_model_elements(data)
 
-        _log("Writing concrete elements to Allplan document.")
+        _log("Writing model elements to Allplan document.")
         AllplanBaseElements.CreateElements(
             doc,
             AllplanGeo.Matrix3D(),
-            concrete_elements,
+            model_elements,
             [],
             None,
         )
 
-        _log("Concrete CreateElements finished.")
-        _log("Creating reinforcement elements for CreateElementResult.")
-        rebar_elements = create_rebar_elements(data)
+        _log("CreateElements finished.")
 
         result = build_result(data, run_id)
         result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
@@ -113,10 +108,7 @@ def create_element(build_ele, doc) -> CreateElementResult:
         done_marker.write_text("done", encoding="utf-8")
         _log("worker_done.txt written.")
 
-        create_result = CreateElementResult(rebar_elements)
-        create_result.placement_point = AllplanGeo.Point3D(0.0, 0.0, 0.0)
-        create_result.multi_placement = False
-        return create_result
+        return CreateElementResult()
 
     except BaseException as error:
         _log(f"Worker failed: {error}")
@@ -124,19 +116,11 @@ def create_element(build_ele, doc) -> CreateElementResult:
         raise
 
 
-def create_concrete_elements(data: dict) -> ModelEleList:
+def create_model_elements(data: dict) -> ModelEleList:
     elements = ModelEleList()
     add_concrete_context(elements, data)
     add_cap_rebar_visual(elements, data)
-    return elements
-
-
-def create_rebar_elements(data: dict) -> ModelEleList:
-    elements = ModelEleList()
-    counter = {"position": 100}
-
-    add_pile_rebar(elements, data, counter)
-
+    add_pile_rebar_visual(elements, data)
     return elements
 
 
@@ -210,10 +194,12 @@ def append_cylinder_y(elements: ModelEleList, radius: float, x: float, y_min: fl
     elements.append_geometry_3d(AllplanGeo.BRep3D.CreateCylinder(placement, radius, y_max - y_min))
 
 
-def add_pile_rebar(elements: ModelEleList, data: dict, counter: dict[str, int]) -> None:
+def add_pile_rebar_visual(elements: ModelEleList, data: dict) -> None:
     radius = data["pile_diameter"] / 2.0 - data["cover"]
     z_min = -data["pile_depth"]
     z_max = data["cap_height"] - data["cover"]
+    vertical_radius = data["pile_vertical_diameter"] / 2.0
+    hoop_radius = data["pile_hoop_diameter"] / 2.0
 
     for pile in data["pile_centers"]:
         cx = pile["x"]
@@ -223,41 +209,50 @@ def add_pile_rebar(elements: ModelEleList, data: dict, counter: dict[str, int]) 
             angle = 2.0 * math.pi * index / data["pile_vertical_count"]
             x = cx + radius * math.cos(angle)
             y = cy + radius * math.sin(angle)
-            elements.append(straight_bar(next_position(counter), data["pile_vertical_diameter"], (x, y, z_min), (x, y, z_max)))
+            append_cylinder_z(elements, vertical_radius, x, y, z_min, z_max)
 
         for z in positions_between(z_min, 0.0, data["pile_hoop_spacing"]):
-            append_pile_hoop(elements, counter, data["pile_hoop_diameter"], cx, cy, radius, z)
+            append_pile_hoop_visual(elements, hoop_radius, cx, cy, radius, z)
 
 
-def straight_bar(position: int, diameter: float, start: tuple[float, float, float], end: tuple[float, float, float]):
-    shape = AllplanReinf.BendingShape(AllplanGeo.Point3D(0.0, 0.0, 0.0), diameter, STEEL_GRADE, CONCRETE_GRADE)
-    return AllplanReinf.BarPlacement(
-        position,
-        1,
-        AllplanGeo.Vector3D(0.0, 0.0, 0.0),
-        point(start),
-        point(end),
-        shape,
+def append_cylinder_z(elements: ModelEleList, radius: float, x: float, y: float, z_min: float, z_max: float) -> None:
+    placement = AllplanGeo.AxisPlacement3D(
+        AllplanGeo.Point3D(x, y, z_min),
+        AllplanGeo.Vector3D(1.0, 0.0, 0.0),
+        AllplanGeo.Vector3D(0.0, 0.0, 1.0),
     )
+    elements.append_geometry_3d(AllplanGeo.BRep3D.CreateCylinder(placement, radius, z_max - z_min))
 
 
-def append_pile_hoop(elements: ModelEleList, counter: dict[str, int], diameter: float, cx: float, cy: float, radius: float, z: float) -> None:
+def append_pile_hoop_visual(elements: ModelEleList, bar_radius: float, cx: float, cy: float, radius: float, z: float) -> None:
     segments = 20
     points = []
     for index in range(segments + 1):
         angle = 2.0 * math.pi * index / segments
         points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle), z))
-    append_closed_bar_segments(elements, counter, diameter, points)
+    append_polyline_cylinders(elements, bar_radius, points)
 
 
-def append_closed_bar_segments(elements: ModelEleList, counter: dict[str, int], diameter: float, points: list[tuple[float, float, float]]) -> None:
+def append_polyline_cylinders(elements: ModelEleList, radius: float, points: list[tuple[float, float, float]]) -> None:
     for start, end in zip(points, points[1:]):
-        elements.append(straight_bar(next_position(counter), diameter, start, end))
+        append_cylinder_between(elements, radius, start, end)
 
 
-def next_position(counter: dict[str, int]) -> int:
-    counter["position"] += 1
-    return counter["position"]
+def append_cylinder_between(elements: ModelEleList, radius: float, start: tuple[float, float, float], end: tuple[float, float, float]) -> None:
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    dz = end[2] - start[2]
+    length = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if length == 0:
+        return
+
+    axis = AllplanGeo.Vector3D(dx / length, dy / length, dz / length)
+    reference = AllplanGeo.Vector3D(0.0, 0.0, 1.0)
+    if abs(axis.Z) > 0.99:
+        reference = AllplanGeo.Vector3D(1.0, 0.0, 0.0)
+
+    placement = AllplanGeo.AxisPlacement3D(point(start), reference, axis)
+    elements.append_geometry_3d(AllplanGeo.BRep3D.CreateCylinder(placement, radius, length))
 
 
 def positions_between(start: float, end: float, spacing: float) -> list[float]:
