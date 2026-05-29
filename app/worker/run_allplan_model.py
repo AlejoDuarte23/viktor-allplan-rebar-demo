@@ -1,5 +1,6 @@
 import os
 import shutil
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -7,11 +8,11 @@ from pathlib import Path
 
 ALLPLAN_EXE = Path(r"C:\Program Files\Allplan\Allplan 2026\Prg\Allplan_2026.exe")
 ALLPLAN_LOCAL = Path.home() / "Documents" / "Nemetschek" / "Allplan" / "2026" / "Usr" / "Local"
-ALLPLAN_PROJECTS_DIR = Path(r"C:\Data\Allplan\Allplan 2026\Prj")
-PROJECT_NAME = "viktor-template"
-PROJECT_DIR = ALLPLAN_PROJECTS_DIR / f"{PROJECT_NAME}.prj"
-ALLPLAN_PROCESS_NAME = ALLPLAN_EXE.name
 ALLPLAN_CLOSE_TIMEOUT_SECONDS = 30
+
+# Keep Allplan open after worker completes for inspection
+# Set to False to close Allplan automatically (useful for production/automated runs)
+KEEP_ALLPLAN_OPEN = True
 
 
 def log(log_path: Path, message: str) -> None:
@@ -20,59 +21,61 @@ def log(log_path: Path, message: str) -> None:
         file.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
 
 
-def stop_allplan_processes(log_path: Path) -> None:
+def is_process_running(process_name: str) -> bool:
+    """Check if a process is running on Windows."""
     if os.name != "nt":
-        log(log_path, "Skipping Allplan process cleanup because this is not Windows.")
-        return
+        return False
 
-    completed_process = subprocess.run(
-        ["taskkill", "/IM", ALLPLAN_PROCESS_NAME, "/T", "/F"],
+    result = subprocess.run(
+        ["tasklist", "/FI", f"IMAGENAME eq {process_name}"],
         capture_output=True,
         text=True,
-        timeout=ALLPLAN_CLOSE_TIMEOUT_SECONDS,
-    )
-    output = "\n".join(
-        text.strip()
-        for text in [completed_process.stdout, completed_process.stderr]
-        if text.strip()
+        shell=False,
     )
 
-    if completed_process.returncode == 0:
-        log(log_path, f"Stopped running {ALLPLAN_PROCESS_NAME} process(es).")
-        time.sleep(2)
-        return
-
-    if completed_process.returncode == 128 or "not found" in output.lower():
-        log(log_path, f"No running {ALLPLAN_PROCESS_NAME} process was found.")
-        return
-
-    raise RuntimeError(
-        f"Could not stop running {ALLPLAN_PROCESS_NAME} process(es): {output}"
-    )
+    return process_name.lower() in result.stdout.lower()
 
 
-def remove_existing_project(log_path: Path) -> None:
-    if not PROJECT_DIR.exists():
-        return
+def assert_allplan_is_closed(log_path: Path) -> None:
+    """Verify that Allplan is not running before modifying the template project."""
+    allplan_processes = [
+        "Allplan.exe",
+        "Allmenu.exe",
+    ]
 
+    running_processes = [
+        process_name
+        for process_name in allplan_processes
+        if is_process_running(process_name)
+    ]
+
+    if running_processes:
+        error_message = (
+            "Allplan is still running. Close Allplan before replacing the template project. "
+            f"Running processes: {', '.join(running_processes)}"
+        )
+        log(log_path, error_message)
+        raise RuntimeError(error_message)
+
+    log(log_path, "Verified that Allplan is not running.")
+
+
+
+
+def make_writable(path: str) -> None:
+    """Remove read-only flag from a file or directory."""
     try:
-        shutil.rmtree(PROJECT_DIR)
-        log(log_path, f"Removed existing project at {PROJECT_DIR}.")
-        return
-    except Exception as error:
-        log(log_path, f"Could not remove existing project: {error}")
-        log(log_path, "Stopping Allplan and retrying project replacement.")
+        os.chmod(path, stat.S_IWRITE)
+    except (FileNotFoundError, PermissionError):
+        pass
 
-    stop_allplan_processes(log_path)
 
-    try:
-        shutil.rmtree(PROJECT_DIR)
-        log(log_path, f"Removed existing project at {PROJECT_DIR} after stopping Allplan.")
-    except Exception as error:
-        raise RuntimeError(
-            f"Could not replace template project at {PROJECT_DIR}. "
-            "Close Allplan and check project folder permissions."
-        ) from error
+def remove_readonly_and_retry(function, path, exc_info):
+    """Error handler for shutil.rmtree to handle read-only files."""
+    make_writable(path)
+    function(path)
+
+
 
 
 def stop_launched_allplan(process: subprocess.Popen, log_path: Path) -> None:
@@ -93,45 +96,30 @@ def stop_launched_allplan(process: subprocess.Popen, log_path: Path) -> None:
         log(log_path, f"Allplan process killed with code {process.returncode}.")
 
 
-def install_template_project(template_zip: Path, log_path: Path) -> None:
-    extract_dir = template_zip.parent / "_template_project_extract"
-
-    if extract_dir.exists():
-        shutil.rmtree(extract_dir)
-
-    remove_existing_project(log_path)
-
-    extract_dir.mkdir(parents=True, exist_ok=True)
-    shutil.unpack_archive(str(template_zip), str(extract_dir), "zip")
-
-    project_folder_inside_zip = extract_dir / f"{PROJECT_NAME}.prj"
-    if project_folder_inside_zip.exists():
-        shutil.copytree(project_folder_inside_zip, PROJECT_DIR)
-    else:
-        shutil.copytree(extract_dir, PROJECT_DIR)
-
-    shutil.rmtree(extract_dir)
 
 
 def main() -> None:
     workdir = Path.cwd()
-    template_zip = workdir / "template_project.zip"
+    template_apn = workdir / "template_project.apn"
     inputs_path = workdir / "inputs.json"
     pyp_source = workdir / "RebarWorker.pyp"
     py_source = workdir / "RebarWorker.py"
-    output_zip = workdir / "result_project.zip"
+    output_apn = workdir / "result_project.apn"
     output_log = workdir / "worker_log.txt"
 
-    if output_zip.exists():
-        output_zip.unlink()
+    if output_apn.exists():
+        output_apn.unlink()
 
     if output_log.exists():
         output_log.unlink()
 
     log(output_log, "Worker started.")
-    log(output_log, f"Installing template project from {template_zip}.")
-    install_template_project(template_zip, output_log)
-    log(output_log, f"Template project ready at {PROJECT_DIR}.")
+
+    if not template_apn.exists():
+        raise FileNotFoundError(f"Template APN file was not found: {template_apn}")
+
+    shutil.copy2(template_apn, output_apn)
+    log(output_log, f"Copied APN template from {template_apn} to {output_apn}.")
 
     python_parts_dir = ALLPLAN_LOCAL / "PythonParts" / "ViktorWorker"
     python_scripts_dir = ALLPLAN_LOCAL / "PythonPartsScripts" / "ViktorWorker"
@@ -160,12 +148,13 @@ def main() -> None:
     process = subprocess.Popen(
         [
             str(ALLPLAN_EXE),
+            str(output_apn),
             "-o",
             f"@{pyp_target}",
         ],
         cwd=str(workdir),
     )
-    log(output_log, f"Started Allplan with PID {process.pid}.")
+    log(output_log, f"Started Allplan with PID {process.pid} opening {output_apn}.")
 
     try:
         deadline = time.time() + 840
@@ -200,14 +189,16 @@ def main() -> None:
             file.write("\nPythonPart log:\n")
             file.write(log_source.read_text(encoding="utf-8"))
 
-        shutil.make_archive(
-            base_name=str(output_zip.with_suffix("")),
-            format="zip",
-            root_dir=str(PROJECT_DIR),
-        )
-        log(output_log, f"Created {output_zip}.")
-    finally:
+        log(output_log, f"Output APN ready at {output_apn}.")
+
+        if KEEP_ALLPLAN_OPEN:
+            log(output_log, "Leaving Allplan open for inspection (KEEP_ALLPLAN_OPEN=True).")
+        else:
+            stop_launched_allplan(process, output_log)
+    except Exception as error:
+        log(output_log, f"Worker failed with error: {error}")
         stop_launched_allplan(process, output_log)
+        raise
 
 
 if __name__ == "__main__":

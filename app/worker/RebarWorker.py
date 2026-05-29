@@ -20,7 +20,6 @@ except ImportError:
     RotationUtil = getattr(RotationUtilModule, "RotationUtil", RotationUtilModule)
 
 
-PROJECT_NAME = "viktor-template"
 DRAWING_FILE_NUMBER = 1
 
 
@@ -47,29 +46,6 @@ def _load_inputs() -> dict:
         return json.load(file)
 
 
-def _open_project(doc) -> None:
-    current_project_name, host_name = AllplanBaseElements.ProjectService.GetCurrentProjectNameAndHost()
-
-    if current_project_name == PROJECT_NAME:
-        _log(f"Project '{PROJECT_NAME}' is already active.")
-        return
-
-    open_result = AllplanBaseElements.ProjectService.OpenProject(
-        doc,
-        host_name,
-        PROJECT_NAME,
-    )
-
-    _log(f"OpenProject returned: {open_result}")
-
-    if open_result not in ("Project opened", "Active project", "project opened"):
-        raise RuntimeError(
-            f"Could not open Allplan project '{PROJECT_NAME}'. "
-            f"Current project was '{current_project_name}'. "
-            f"Allplan returned: '{open_result}'."
-        )
-
-
 def _load_drawing_file(doc) -> None:
     drawing_service = AllplanBaseElements.DrawingFileService()
 
@@ -90,10 +66,10 @@ def create_element(build_ele, doc) -> CreateElementResult:
         result_path = Path(__file__).with_name("result.json")
 
         _log(f"Run ID: {run_id}.")
-        _log("Opening project.")
-        _open_project(doc)
 
-        _log("Project opened.")
+        current_project_name, host_name = AllplanBaseElements.ProjectService.GetCurrentProjectNameAndHost()
+        _log(f"Using active Allplan project: {current_project_name}, host: {host_name}.")
+
         _log(f"Loading drawing file {DRAWING_FILE_NUMBER}.")
         _load_drawing_file(doc)
 
@@ -103,7 +79,7 @@ def create_element(build_ele, doc) -> CreateElementResult:
 
         _log_model_elements(model_elements)
 
-        result = build_result(data, run_id)
+        result = build_result(data, run_id, current_project_name)
         result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
         _log("result.json written.")
 
@@ -221,9 +197,9 @@ def add_cap_rebar(elements: ModelEleList, data: dict) -> None:
             start_point=AllplanGeo.Point3D(x_min, y, z_top),
             end_point=AllplanGeo.Point3D(x_max, y, z_top),
             start_hook_length=mat_hook_length,
-            start_hook_angle=mat_hook_angle,
+            start_hook_angle=-mat_hook_angle,  # Negative angle points hooks downward
             end_hook_length=mat_hook_length,
-            end_hook_angle=mat_hook_angle,
+            end_hook_angle=-mat_hook_angle,
         )
 
     for index, x in enumerate(x_positions):
@@ -245,9 +221,9 @@ def add_cap_rebar(elements: ModelEleList, data: dict) -> None:
             start_point=AllplanGeo.Point3D(x, y_min, z_top),
             end_point=AllplanGeo.Point3D(x, y_max, z_top),
             start_hook_length=mat_hook_length,
-            start_hook_angle=mat_hook_angle,
+            start_hook_angle=-mat_hook_angle,  # Negative angle points hooks downward
             end_hook_length=mat_hook_length,
-            end_hook_angle=mat_hook_angle,
+            end_hook_angle=-mat_hook_angle,
         )
 
 
@@ -276,7 +252,7 @@ def add_pile_rebar(elements: ModelEleList, data: dict) -> None:
 
     z_bottom = -data["pile_depth"] + cover
     hoop_z_top = -cover
-    vertical_z_top = data["cap_height"] - cover
+    vertical_z_top = data["cap_height"] / 2.0  # Stop at mid-height of cap
     if (hoop_z_top - z_bottom) <= 0.001:
         raise ValueError("Pile reinforcement clear height is zero or negative.")
 
@@ -632,7 +608,7 @@ def positions_between(start: float, end: float, spacing: float) -> list[float]:
     return [start + index * span / (count - 1) for index in range(count)]
 
 
-def build_result(data: dict, run_id: str) -> dict:
+def build_result(data: dict, run_id: str, project_name: str) -> dict:
     cover = data["cover"]
     x_positions = positions_between(
         -data["cap_length"] / 2.0 + cover,
@@ -650,7 +626,7 @@ def build_result(data: dict, run_id: str) -> dict:
 
     return {
         "run_id": run_id,
-        "project_name": PROJECT_NAME,
+        "project_name": project_name,
         "drawing_file_number": DRAWING_FILE_NUMBER,
         "created": {
             "pile_cap": 1,
