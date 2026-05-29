@@ -30,8 +30,12 @@ class Parametrization(vkt.Parametrization):
     reinforcement.cover = vkt.NumberField("Concrete cover", default=50.0, min=20.0, max=150.0, suffix="mm", flex=50)
     reinforcement.mat_bar_diameter = vkt.NumberField("Mat bar diameter", default=16.0, min=8.0, suffix="mm", flex=50)
     reinforcement.mat_spacing = vkt.NumberField("Mat spacing", default=180.0, min=75.0, suffix="mm", flex=50)
+    reinforcement.mat_hook_length = vkt.NumberField("Mat bar end hook length", default=240.0, min=0.0, suffix="mm", flex=50)
+    reinforcement.mat_hook_angle = vkt.NumberField("Mat bar end hook angle", default=90.0, min=0.0, max=180.0, suffix="deg", flex=50)
     reinforcement.pile_vertical_diameter = vkt.NumberField("Pile vertical bar diameter", default=16.0, min=8.0, suffix="mm", flex=50)
     reinforcement.pile_vertical_count = vkt.NumberField("Vertical bars per pile", default=8, min=4, max=16, flex=50)
+    reinforcement.pile_vertical_top_hook_length = vkt.NumberField("Pile vertical top hook length", default=240.0, min=0.0, suffix="mm", flex=50)
+    reinforcement.pile_vertical_top_hook_angle = vkt.NumberField("Pile vertical top hook angle", default=90.0, min=0.0, max=180.0, suffix="deg", flex=50)
     reinforcement.pile_hoop_diameter = vkt.NumberField("Pile hoop diameter", default=10.0, min=6.0, suffix="mm", flex=50)
     reinforcement.pile_hoop_spacing = vkt.NumberField("Pile hoop spacing", default=200.0, min=100.0, suffix="mm", flex=50)
 
@@ -54,7 +58,7 @@ class Controller(vkt.Controller):
         html = self._build_rebar_html(data)
         return vkt.WebResult(html=html)
 
-    @vkt.TableView("Visual geometry schedule")
+    @vkt.TableView("Native rebar schedule")
     def bar_schedule(self, params, **kwargs):
         rows = self._bar_schedule(self._worker_input(params))
         return vkt.TableResult(
@@ -88,7 +92,7 @@ class Controller(vkt.Controller):
             files=files,
             output_filenames=["result_project.zip", "result.json", "worker_log.txt"],
         )
-        vkt.progress_message("Starting Allplan visual rebar worker.")
+        vkt.progress_message("Starting Allplan native rebar worker.")
         analysis.execute(timeout=900)
         result_project_zip = analysis.get_output_file("result_project.zip")
         analysis.get_output_file("result.json")
@@ -108,8 +112,12 @@ class Controller(vkt.Controller):
             "cover": float(params.reinforcement.cover),
             "mat_bar_diameter": float(params.reinforcement.mat_bar_diameter),
             "mat_spacing": float(params.reinforcement.mat_spacing),
+            "mat_hook_length": float(params.reinforcement.mat_hook_length),
+            "mat_hook_angle": float(params.reinforcement.mat_hook_angle),
             "pile_vertical_diameter": float(params.reinforcement.pile_vertical_diameter),
             "pile_vertical_count": int(params.reinforcement.pile_vertical_count),
+            "pile_vertical_top_hook_length": float(params.reinforcement.pile_vertical_top_hook_length),
+            "pile_vertical_top_hook_angle": float(params.reinforcement.pile_vertical_top_hook_angle),
             "pile_hoop_diameter": float(params.reinforcement.pile_hoop_diameter),
             "pile_hoop_spacing": float(params.reinforcement.pile_hoop_spacing),
         }
@@ -130,22 +138,39 @@ class Controller(vkt.Controller):
     def _bar_schedule(cls, data: dict) -> list[list[str | int | float]]:
         clear_length = data["cap_length"] - 2.0 * data["cover"]
         clear_width = data["cap_width"] - 2.0 * data["cover"]
-        bars_across_width = len(cls._sample_positions(cls._positions_between(clear_width, data["mat_spacing"])))
-        bars_across_length = len(cls._sample_positions(cls._positions_between(clear_length, data["mat_spacing"])))
-        hoop_count = cls._bar_count(data["pile_depth"], data["pile_hoop_spacing"])
+        bars_across_width = len(cls._positions_between(clear_width, data["mat_spacing"]))
+        bars_across_length = len(cls._positions_between(clear_length, data["mat_spacing"]))
+        pile_hoop_height = max(0.0, data["pile_depth"] - 2.0 * data["cover"])
+        hoop_count = cls._bar_count(pile_hoop_height, data["pile_hoop_spacing"])
 
         hoop_diameter = data["pile_diameter"] - 2.0 * data["cover"] - data["pile_hoop_diameter"]
         hoop_length = math.pi * hoop_diameter
-        pile_vertical_length = data["pile_depth"] + data["cap_height"] - data["cover"]
+        mat_hook_addition = 2.0 * data["mat_hook_length"]
+        pile_vertical_length = max(0.0, data["pile_depth"] + data["cap_height"] - 2.0 * data["cover"])
+        pile_vertical_length += data["pile_vertical_top_hook_length"]
 
         rows = [
-            ["C1", "Cap mat X, bottom and top", data["mat_bar_diameter"], f"sampled @ {data['mat_spacing']:.0f} mm", 2 * bars_across_width, clear_length],
-            ["C2", "Cap mat Y, bottom and top", data["mat_bar_diameter"], f"sampled @ {data['mat_spacing']:.0f} mm", 2 * bars_across_length, clear_width],
+            [
+                "C1",
+                "Cap mat X, bottom and top",
+                data["mat_bar_diameter"],
+                f"@ {data['mat_spacing']:.0f} mm, {data['mat_hook_length']:.0f} mm hooks",
+                2 * bars_across_width,
+                clear_length + mat_hook_addition,
+            ],
+            [
+                "C2",
+                "Cap mat Y, bottom and top",
+                data["mat_bar_diameter"],
+                f"@ {data['mat_spacing']:.0f} mm, {data['mat_hook_length']:.0f} mm hooks",
+                2 * bars_across_length,
+                clear_width + mat_hook_addition,
+            ],
             [
                 "P1",
                 "Pile verticals",
                 data["pile_vertical_diameter"],
-                f"{data['pile_vertical_count']} per pile",
+                f"{data['pile_vertical_count']} per pile, {data['pile_vertical_top_hook_length']:.0f} mm top hooks",
                 4 * data["pile_vertical_count"],
                 pile_vertical_length,
             ],
@@ -227,16 +252,16 @@ class Controller(vkt.Controller):
       <h1>Pile Cap Rebar</h1>
       <div class="meta">
         <span>Concrete cover {data["cover"]:.0f} mm</span>
-        <span>Visual geometry export</span>
+        <span>Native Allplan rebar export</span>
         <span>Mat {data["mat_bar_diameter"]:.0f} @ {data["mat_spacing"]:.0f}</span>
-        <span>Total visual length {total_length:.1f} m</span>
+        <span>Total scheduled length {total_length:.1f} m</span>
       </div>
     </div>
     <svg viewBox="0 0 1120 720" role="img" aria-label="Plan and elevation rebar sketch">
       {plan}
       {elevation}
     </svg>
-    <div class="caption">Black lines show the concrete outline and visual rebar geometry. Dashed circles show the four piles.</div>
+    <div class="caption">Black lines show the concrete outline and sampled rebar markers. The Allplan export uses native reinforcement entities.</div>
   </div>
 </body>
 </html>

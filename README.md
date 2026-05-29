@@ -6,9 +6,9 @@ The app keeps the flow small and easy to follow:
 - Configure concrete cover, cap mat bars, pile vertical bars, and pile hoops in VIKTOR.
 - Review a clean 2D sketch and a simple quantity table.
 - Send the same parameters to an Allplan PythonPart worker.
-- Download an Allplan project with the pile cap, piles, and visible rebar layout.
+- Download an Allplan project with the pile cap, piles, and native Allplan reinforcement.
 
-The current version uses regular 3D geometry to show the rebar in Allplan. This keeps the demo stable and easy to run. Creating native Allplan reinforcement entities is still work in progress.
+The Allplan worker creates real reinforcement entities for the cap mats, pile vertical bars, and pile hoops. Mat bars and pile vertical bars can include 90-degree hooks from the VIKTOR inputs.
 
 ![VIKTOR app](assets/viktor-app.png)
 

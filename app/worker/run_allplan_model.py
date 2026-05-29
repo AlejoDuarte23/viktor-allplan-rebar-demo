@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 import time
@@ -9,6 +10,8 @@ ALLPLAN_LOCAL = Path.home() / "Documents" / "Nemetschek" / "Allplan" / "2026" / 
 ALLPLAN_PROJECTS_DIR = Path(r"C:\Data\Allplan\Allplan 2026\Prj")
 PROJECT_NAME = "viktor-template"
 PROJECT_DIR = ALLPLAN_PROJECTS_DIR / f"{PROJECT_NAME}.prj"
+ALLPLAN_PROCESS_NAME = ALLPLAN_EXE.name
+ALLPLAN_CLOSE_TIMEOUT_SECONDS = 30
 
 
 def log(log_path: Path, message: str) -> None:
@@ -17,20 +20,86 @@ def log(log_path: Path, message: str) -> None:
         file.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
 
 
+def stop_allplan_processes(log_path: Path) -> None:
+    if os.name != "nt":
+        log(log_path, "Skipping Allplan process cleanup because this is not Windows.")
+        return
+
+    completed_process = subprocess.run(
+        ["taskkill", "/IM", ALLPLAN_PROCESS_NAME, "/T", "/F"],
+        capture_output=True,
+        text=True,
+        timeout=ALLPLAN_CLOSE_TIMEOUT_SECONDS,
+    )
+    output = "\n".join(
+        text.strip()
+        for text in [completed_process.stdout, completed_process.stderr]
+        if text.strip()
+    )
+
+    if completed_process.returncode == 0:
+        log(log_path, f"Stopped running {ALLPLAN_PROCESS_NAME} process(es).")
+        time.sleep(2)
+        return
+
+    if completed_process.returncode == 128 or "not found" in output.lower():
+        log(log_path, f"No running {ALLPLAN_PROCESS_NAME} process was found.")
+        return
+
+    raise RuntimeError(
+        f"Could not stop running {ALLPLAN_PROCESS_NAME} process(es): {output}"
+    )
+
+
+def remove_existing_project(log_path: Path) -> None:
+    if not PROJECT_DIR.exists():
+        return
+
+    try:
+        shutil.rmtree(PROJECT_DIR)
+        log(log_path, f"Removed existing project at {PROJECT_DIR}.")
+        return
+    except Exception as error:
+        log(log_path, f"Could not remove existing project: {error}")
+        log(log_path, "Stopping Allplan and retrying project replacement.")
+
+    stop_allplan_processes(log_path)
+
+    try:
+        shutil.rmtree(PROJECT_DIR)
+        log(log_path, f"Removed existing project at {PROJECT_DIR} after stopping Allplan.")
+    except Exception as error:
+        raise RuntimeError(
+            f"Could not replace template project at {PROJECT_DIR}. "
+            "Close Allplan and check project folder permissions."
+        ) from error
+
+
+def stop_launched_allplan(process: subprocess.Popen, log_path: Path) -> None:
+    if process.poll() is not None:
+        log(log_path, f"Allplan process already exited with code {process.returncode}.")
+        return
+
+    log(log_path, f"Stopping launched Allplan process with PID {process.pid}.")
+    process.terminate()
+
+    try:
+        process.wait(timeout=ALLPLAN_CLOSE_TIMEOUT_SECONDS)
+        log(log_path, f"Allplan process exited with code {process.returncode}.")
+    except subprocess.TimeoutExpired:
+        log(log_path, "Allplan did not exit after terminate; killing process.")
+        process.kill()
+        process.wait(timeout=10)
+        log(log_path, f"Allplan process killed with code {process.returncode}.")
+
+
 def install_template_project(template_zip: Path, log_path: Path) -> None:
     extract_dir = template_zip.parent / "_template_project_extract"
 
     if extract_dir.exists():
         shutil.rmtree(extract_dir)
 
-    if PROJECT_DIR.exists():
-        try:
-            shutil.rmtree(PROJECT_DIR)
-            log(log_path, f"Removed existing project at {PROJECT_DIR}.")
-        except Exception as error:
-            log(log_path, f"Could not remove existing project because files may be locked: {error}")
-            log(log_path, "Will reuse existing project.")
-            return
+    remove_existing_project(log_path)
 
     extract_dir.mkdir(parents=True, exist_ok=True)
     shutil.unpack_archive(str(template_zip), str(extract_dir), "zip")
@@ -98,45 +167,47 @@ def main() -> None:
     )
     log(output_log, f"Started Allplan with PID {process.pid}.")
 
-    deadline = time.time() + 840
-    while not done_marker.exists():
-        if error_source.exists():
-            error_text = error_source.read_text(encoding="utf-8")
-            log(output_log, "worker_error.txt detected.")
-            log(output_log, error_text)
-            raise RuntimeError(f"Allplan worker failed:\n{error_text}")
+    try:
+        deadline = time.time() + 840
+        while not done_marker.exists():
+            if error_source.exists():
+                error_text = error_source.read_text(encoding="utf-8")
+                log(output_log, "worker_error.txt detected.")
+                log(output_log, error_text)
+                raise RuntimeError(f"Allplan worker failed:\n{error_text}")
 
-        if process.poll() is not None:
-            log(output_log, f"Allplan process ended before marker. Exit code: {process.returncode}.")
-            time.sleep(5)
-            if not done_marker.exists():
-                raise RuntimeError(f"Allplan closed before the worker finished. Exit code: {process.returncode}")
-            break
+            if process.poll() is not None:
+                log(output_log, f"Allplan process ended before marker. Exit code: {process.returncode}.")
+                time.sleep(5)
+                if not done_marker.exists():
+                    raise RuntimeError(f"Allplan closed before the worker finished. Exit code: {process.returncode}")
+                break
 
-        if time.time() > deadline:
-            log(output_log, "Timeout waiting for worker_done.txt.")
-            process.terminate()
-            raise TimeoutError("Allplan worker did not finish within 840 seconds.")
+            if time.time() > deadline:
+                log(output_log, "Timeout waiting for worker_done.txt.")
+                raise TimeoutError("Allplan worker did not finish within 840 seconds.")
 
-        time.sleep(1)
+            time.sleep(1)
 
-    log(output_log, "worker_done.txt detected.")
-    log(output_log, f"Allplan process state after marker: {process.poll()}.")
-    time.sleep(5)
-    log(output_log, "Waited 5 seconds for Allplan to finish creating returned reinforcement elements.")
-    shutil.copy2(result_source, output_json)
-    log(output_log, "Copied result.json back to worker output folder.")
+        log(output_log, "worker_done.txt detected.")
+        log(output_log, f"Allplan process state after marker: {process.poll()}.")
+        time.sleep(5)
+        log(output_log, "Waited 5 seconds for Allplan to finish creating returned reinforcement elements.")
+        shutil.copy2(result_source, output_json)
+        log(output_log, "Copied result.json back to worker output folder.")
 
-    with output_log.open("a", encoding="utf-8") as file:
-        file.write("\nPythonPart log:\n")
-        file.write(log_source.read_text(encoding="utf-8"))
+        with output_log.open("a", encoding="utf-8") as file:
+            file.write("\nPythonPart log:\n")
+            file.write(log_source.read_text(encoding="utf-8"))
 
-    shutil.make_archive(
-        base_name=str(output_zip.with_suffix("")),
-        format="zip",
-        root_dir=str(PROJECT_DIR),
-    )
-    log(output_log, f"Created {output_zip}.")
+        shutil.make_archive(
+            base_name=str(output_zip.with_suffix("")),
+            format="zip",
+            root_dir=str(PROJECT_DIR),
+        )
+        log(output_log, f"Created {output_zip}.")
+    finally:
+        stop_launched_allplan(process, output_log)
 
 
 if __name__ == "__main__":
