@@ -333,22 +333,74 @@ class Controller(vkt.Controller):
         pile_r = data["pile_diameter"] * scale / 2.0
 
         cap_rebar = []
-        for z in [data["cover"], data["cap_height"] - data["cover"]]:
-            y = base_y - z * scale
-            cap_rebar.append(f'<line x1="{x0 + data["cover"] * scale:.2f}" y1="{y:.2f}" x2="{x0 + cap_w - data["cover"] * scale:.2f}" y2="{y:.2f}" stroke="#111" stroke-width="2"/>')
+        hook_length = data.get("mat_hook_length", 0.0) * scale
+        x_left = x0 + data["cover"] * scale
+        x_right = x0 + cap_w - data["cover"] * scale
+
+        # Bottom mat with upward hooks at ends (X-direction bars shown as lines)
+        y_bottom = base_y - data["cover"] * scale
+        cap_rebar.append(f'<line x1="{x_left:.2f}" y1="{y_bottom:.2f}" x2="{x_right:.2f}" y2="{y_bottom:.2f}" stroke="#111" stroke-width="2"/>')
+        if hook_length > 0:
+            # Left hook (upward)
+            cap_rebar.append(f'<line x1="{x_left:.2f}" y1="{y_bottom:.2f}" x2="{x_left:.2f}" y2="{y_bottom - hook_length:.2f}" stroke="#111" stroke-width="2"/>')
+            # Right hook (upward)
+            cap_rebar.append(f'<line x1="{x_right:.2f}" y1="{y_bottom:.2f}" x2="{x_right:.2f}" y2="{y_bottom - hook_length:.2f}" stroke="#111" stroke-width="2"/>')
+
+        # Top mat with downward hooks at ends (X-direction bars shown as lines)
+        y_top = base_y - (data["cap_height"] - data["cover"]) * scale
+        cap_rebar.append(f'<line x1="{x_left:.2f}" y1="{y_top:.2f}" x2="{x_right:.2f}" y2="{y_top:.2f}" stroke="#111" stroke-width="2"/>')
+        if hook_length > 0:
+            # Left hook (downward)
+            cap_rebar.append(f'<line x1="{x_left:.2f}" y1="{y_top:.2f}" x2="{x_left:.2f}" y2="{y_top + hook_length:.2f}" stroke="#111" stroke-width="2"/>')
+            # Right hook (downward)
+            cap_rebar.append(f'<line x1="{x_right:.2f}" y1="{y_top:.2f}" x2="{x_right:.2f}" y2="{y_top + hook_length:.2f}" stroke="#111" stroke-width="2"/>')
+
+        # Y-direction bars shown as circles (perpendicular to elevation view)
+        mat_dot_r = max(3.0, data["mat_bar_diameter"] * scale / 1.5)  # Larger and more visible
+        y_positions_sample = cls._sample_positions(
+            cls._positions_between(data["cap_length"] - 2.0 * data["cover"], data["mat_spacing"]),
+            max_count=7
+        )
+        circle_offset = 3.5  # Closer to horizontal bars
+        edge_inset = 8.0  # Move edge circles inward to avoid hooks
+        for i, y_pos in enumerate(y_positions_sample):
+            x = x0 + data["cover"] * scale + y_pos * scale
+            # Adjust X position for edge circles
+            if i == 0:
+                x += edge_inset  # Move left edge circle to the right
+            elif i == len(y_positions_sample) - 1:
+                x -= edge_inset  # Move right edge circle to the left
+            # Bottom layer Y-direction bars (offset upward from the line)
+            cap_rebar.append(f'<circle cx="{x:.2f}" cy="{y_bottom - circle_offset:.2f}" r="{mat_dot_r:.2f}" fill="#111"/>')
+            # Top layer Y-direction bars (offset downward from the line)
+            cap_rebar.append(f'<circle cx="{x:.2f}" cy="{y_top + circle_offset:.2f}" r="{mat_dot_r:.2f}" fill="#111"/>')
 
         pile_lines = []
         visible_piles = [data["pile_centers"][0], data["pile_centers"][1]]
-        hoop_count = cls._bar_count(data["pile_depth"], data["pile_hoop_spacing"])
+        vertical_top = base_y - cap_h / 2.0  # Pile verticals stop at mid-height of cap
+        pile_bottom = base_y + pile_h  # Bottom of pile
+        total_vertical_height = pile_bottom - vertical_top
+        hoop_count = cls._bar_count(data["pile_depth"] + data["cap_height"] / 2.0, data["pile_hoop_spacing"])
+
         for pile in visible_piles:
             px = x0 + cap_w / 2.0 + pile["x"] * scale
-            pile_lines.append(f'<line x1="{px - pile_r:.2f}" y1="{base_y:.2f}" x2="{px - pile_r:.2f}" y2="{base_y + pile_h:.2f}" stroke="#111" stroke-width="1.4" stroke-dasharray="6 5"/>')
-            pile_lines.append(f'<line x1="{px + pile_r:.2f}" y1="{base_y:.2f}" x2="{px + pile_r:.2f}" y2="{base_y + pile_h:.2f}" stroke="#111" stroke-width="1.4" stroke-dasharray="6 5"/>')
+            # Pile outline (concrete) - only below the cap
+            pile_lines.append(f'<line x1="{px - pile_r:.2f}" y1="{base_y:.2f}" x2="{px - pile_r:.2f}" y2="{pile_bottom:.2f}" stroke="#111" stroke-width="1.4" stroke-dasharray="6 5"/>')
+            pile_lines.append(f'<line x1="{px + pile_r:.2f}" y1="{base_y:.2f}" x2="{px + pile_r:.2f}" y2="{pile_bottom:.2f}" stroke="#111" stroke-width="1.4" stroke-dasharray="6 5"/>')
+
             cage_x = max(2.0, pile_r - data["cover"] * scale)
+            # Vertical bars extend from pile bottom to mid-height of cap
             for side in [-1.0, 1.0]:
-                pile_lines.append(f'<line x1="{px + side * cage_x:.2f}" y1="{base_y - data["cover"] * scale:.2f}" x2="{px + side * cage_x:.2f}" y2="{base_y + pile_h:.2f}" stroke="#111" stroke-width="2"/>')
+                pile_lines.append(f'<line x1="{px + side * cage_x:.2f}" y1="{vertical_top:.2f}" x2="{px + side * cage_x:.2f}" y2="{pile_bottom:.2f}" stroke="#111" stroke-width="2"/>')
+
+            # Circles at top showing vertical bars in cross-section
+            bar_dot_r = max(1.5, data["pile_vertical_diameter"] * scale / 2.0)
+            for side in [-1.0, 1.0]:
+                pile_lines.append(f'<circle cx="{px + side * cage_x:.2f}" cy="{vertical_top:.2f}" r="{bar_dot_r:.2f}" fill="#111"/>')
+
+            # Hoops extend from pile bottom to mid-height of cap
             for index in range(hoop_count):
-                y = base_y + cls._fraction(index, hoop_count) * pile_h
+                y = vertical_top + cls._fraction(index, hoop_count) * total_vertical_height
                 pile_lines.append(f'<line x1="{px - cage_x:.2f}" y1="{y:.2f}" x2="{px + cage_x:.2f}" y2="{y:.2f}" stroke="#111" stroke-width="1"/>')
 
         return f"""
