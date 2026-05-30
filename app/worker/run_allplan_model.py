@@ -10,10 +10,6 @@ ALLPLAN_EXE = Path(r"C:\Program Files\Allplan\Allplan 2026\Prg\Allplan_2026.exe"
 ALLPLAN_LOCAL = Path.home() / "Documents" / "Nemetschek" / "Allplan" / "2026" / "Usr" / "Local"
 ALLPLAN_CLOSE_TIMEOUT_SECONDS = 30
 
-# Keep Allplan open after worker completes for inspection
-# Set to False to close Allplan automatically (useful for production/automated runs)
-KEEP_ALLPLAN_OPEN = True
-
 
 def log(log_path: Path, message: str) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -185,16 +181,13 @@ def main() -> None:
         shutil.copy2(result_source, output_json)
         log(output_log, "Copied result.json back to worker output folder.")
 
-        with output_log.open("a", encoding="utf-8") as file:
-            file.write("\nPythonPart log:\n")
-            file.write(log_source.read_text(encoding="utf-8"))
+        if log_source.exists():
+            with output_log.open("a", encoding="utf-8") as file:
+                file.write("\nPythonPart log:\n")
+                file.write(log_source.read_text(encoding="utf-8"))
 
         log(output_log, f"Output APN ready at {output_apn}.")
-
-        if KEEP_ALLPLAN_OPEN:
-            log(output_log, "Leaving Allplan open for inspection (KEEP_ALLPLAN_OPEN=True).")
-        else:
-            stop_launched_allplan(process, output_log)
+        log(output_log, "Leaving Allplan open for inspection.")
     except Exception as error:
         log(output_log, f"Worker failed with error: {error}")
         stop_launched_allplan(process, output_log)
