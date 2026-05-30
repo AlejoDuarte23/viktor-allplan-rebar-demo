@@ -18,7 +18,7 @@ class Parametrization(vkt.Parametrization):
         "Visual rebar geometry layout for a rectangular pile cap on four piles. "
         "Dimensions are in millimeters."
     )
-    geometry.cap_length = vkt.NumberField("Pile cap length", default=4000.0, min=1200.0, suffix="mm", flex=50)
+    geometry.cap_length = vkt.NumberField("Pile cap length", default=4250.0, min=1200.0, suffix="mm", flex=50)
     geometry.cap_width = vkt.NumberField("Pile cap width", default=3000.0, min=1200.0, suffix="mm", flex=50)
     geometry.cap_height = vkt.NumberField("Pile cap height", default=800.0, min=300.0, suffix="mm", flex=50)
     geometry.pile_diameter = vkt.NumberField("Pile diameter", default=600.0, min=250.0, suffix="mm", flex=50)
@@ -54,13 +54,13 @@ class Controller(vkt.Controller):
 
     @vkt.WebView("Visual rebar sketch", duration_guess=1)
     def rebar_sketch(self, params, **kwargs):
-        data = self._worker_input(params)
-        html = self._build_rebar_html(data)
+        data = self.worker_input(params)
+        html = self.build_rebar_html(data)
         return vkt.WebResult(html=html)
 
     @vkt.TableView("Native rebar schedule")
     def bar_schedule(self, params, **kwargs):
-        rows = self._bar_schedule(self._worker_input(params))
+        rows = self.bar_schedule(self.worker_input(params))
         return vkt.TableResult(
             rows,
             column_headers=[
@@ -76,13 +76,13 @@ class Controller(vkt.Controller):
         )
 
     def download_allplan_project(self, params, **kwargs):
-        worker_input = self._worker_input(params)
+        worker_input = self.worker_input(params)
         run_id = uuid.uuid4().hex
         worker_input["run_id"] = run_id
 
         files = [
             ("inputs.json", vkt.File.from_data(json.dumps(worker_input, indent=2))),
-            ("template_project.zip", vkt.File.from_path(ALLPLAN_WORKER_DIR / "viktor-template.prj.zip")),
+            ("template_project.apn", vkt.File.from_path(ALLPLAN_WORKER_DIR / "my-viktor-project-template.apn")),
             ("RebarWorker.pyp", vkt.File.from_path(ALLPLAN_WORKER_DIR / "RebarWorker.pyp")),
             ("RebarWorker.py", vkt.File.from_path(ALLPLAN_WORKER_DIR / "RebarWorker.py")),
         ]
@@ -90,18 +90,18 @@ class Controller(vkt.Controller):
         analysis = PythonAnalysis(
             script=vkt.File.from_path(ALLPLAN_WORKER_DIR / "run_allplan_model.py"),
             files=files,
-            output_filenames=["result_project.zip", "result.json", "worker_log.txt"],
+            output_filenames=["result_project.apn", "result.json", "worker_log.txt"],
         )
         vkt.progress_message("Starting Allplan native rebar worker.")
         analysis.execute(timeout=900)
-        result_project_zip = analysis.get_output_file("result_project.zip")
+        result_project_apn = analysis.get_output_file("result_project.apn")
         analysis.get_output_file("result.json")
         analysis.get_output_file("worker_log.txt")
 
-        return vkt.DownloadResult(result_project_zip, f"result_project_{run_id}.zip")
+        return vkt.DownloadResult(result_project_apn, f"result_project_{run_id}.apn")
 
     @classmethod
-    def _worker_input(cls, params) -> dict:
+    def worker_input(cls, params) -> dict:
         return {
             "cap_length": float(params.geometry.cap_length),
             "cap_width": float(params.geometry.cap_width),
@@ -135,13 +135,13 @@ class Controller(vkt.Controller):
         ]
 
     @classmethod
-    def _bar_schedule(cls, data: dict) -> list[list[str | int | float]]:
+    def bar_schedule(cls, data: dict) -> list[list[str | int | float]]:
         clear_length = data["cap_length"] - 2.0 * data["cover"]
         clear_width = data["cap_width"] - 2.0 * data["cover"]
-        bars_across_width = len(cls._positions_between(clear_width, data["mat_spacing"]))
-        bars_across_length = len(cls._positions_between(clear_length, data["mat_spacing"]))
+        bars_across_width = len(cls.positions_between(clear_width, data["mat_spacing"]))
+        bars_across_length = len(cls.positions_between(clear_length, data["mat_spacing"]))
         pile_hoop_height = max(0.0, data["pile_depth"] - 2.0 * data["cover"])
-        hoop_count = cls._bar_count(pile_hoop_height, data["pile_hoop_spacing"])
+        hoop_count = cls.bar_count(pile_hoop_height, data["pile_hoop_spacing"])
 
         hoop_diameter = data["pile_diameter"] - 2.0 * data["cover"] - data["pile_hoop_diameter"]
         hoop_length = math.pi * hoop_diameter
@@ -183,16 +183,16 @@ class Controller(vkt.Controller):
         ]
 
     @staticmethod
-    def _bar_count(span: float, spacing: float) -> int:
+    def bar_count(span: float, spacing: float) -> int:
         return int(span // spacing) + 1
 
     @classmethod
-    def _build_rebar_html(cls, data: dict) -> str:
-        schedule = cls._bar_schedule(data)
+    def build_rebar_html(cls, data: dict) -> str:
+        schedule = cls.bar_schedule(data)
         total_length = sum(row[-1] for row in schedule)
 
-        plan = cls._plan_svg(data)
-        elevation = cls._elevation_svg(data)
+        plan = cls.plan_svg(data)
+        elevation = cls.elevation_svg(data)
 
         return f"""
 <!doctype html>
@@ -268,7 +268,7 @@ class Controller(vkt.Controller):
 """
 
     @classmethod
-    def _plan_svg(cls, data: dict) -> str:
+    def plan_svg(cls, data: dict) -> str:
         panel_x, panel_y, panel_w, panel_h = 40.0, 68.0, 500.0, 560.0
         scale = min(400.0 / data["cap_length"], 340.0 / data["cap_width"])
         cap_w = data["cap_length"] * scale
@@ -283,16 +283,16 @@ class Controller(vkt.Controller):
         clear_x0 = x0 + data["cover"] * scale
         clear_y0 = y0 + data["cover"] * scale
 
-        bars_across_width = len(cls._sample_positions(cls._positions_between(data["cap_width"] - 2.0 * data["cover"], data["mat_spacing"])))
-        bars_across_length = len(cls._sample_positions(cls._positions_between(data["cap_length"] - 2.0 * data["cover"], data["mat_spacing"])))
+        bars_across_width = len(cls.sample_positions(cls.positions_between(data["cap_width"] - 2.0 * data["cover"], data["mat_spacing"])))
+        bars_across_length = len(cls.sample_positions(cls.positions_between(data["cap_length"] - 2.0 * data["cover"], data["mat_spacing"])))
 
         bar_lines = []
         for index in range(bars_across_width):
-            y = clear_y0 + cls._fraction(index, bars_across_width) * clear_h
+            y = clear_y0 + cls.fraction(index, bars_across_width) * clear_h
             bar_lines.append(f'<line x1="{clear_x0:.2f}" y1="{y:.2f}" x2="{clear_x0 + clear_w:.2f}" y2="{y:.2f}" stroke="#111" stroke-width="1"/>')
 
         for index in range(bars_across_length):
-            x = clear_x0 + cls._fraction(index, bars_across_length) * clear_w
+            x = clear_x0 + cls.fraction(index, bars_across_length) * clear_w
             bar_lines.append(f'<line x1="{x:.2f}" y1="{clear_y0:.2f}" x2="{x:.2f}" y2="{clear_y0 + clear_h:.2f}" stroke="#111" stroke-width="1"/>')
 
         pile_marks = []
@@ -321,7 +321,7 @@ class Controller(vkt.Controller):
 """
 
     @classmethod
-    def _elevation_svg(cls, data: dict) -> str:
+    def elevation_svg(cls, data: dict) -> str:
         panel_x, panel_y = 610.0, 68.0
         scale = min(410.0 / data["cap_length"], 420.0 / (data["cap_height"] + data["pile_depth"]))
         cap_w = data["cap_length"] * scale
@@ -333,22 +333,74 @@ class Controller(vkt.Controller):
         pile_r = data["pile_diameter"] * scale / 2.0
 
         cap_rebar = []
-        for z in [data["cover"], data["cap_height"] - data["cover"]]:
-            y = base_y - z * scale
-            cap_rebar.append(f'<line x1="{x0 + data["cover"] * scale:.2f}" y1="{y:.2f}" x2="{x0 + cap_w - data["cover"] * scale:.2f}" y2="{y:.2f}" stroke="#111" stroke-width="2"/>')
+        hook_length = data.get("mat_hook_length", 0.0) * scale
+        x_left = x0 + data["cover"] * scale
+        x_right = x0 + cap_w - data["cover"] * scale
+
+        # Bottom mat with upward hooks at ends (X-direction bars shown as lines)
+        y_bottom = base_y - data["cover"] * scale
+        cap_rebar.append(f'<line x1="{x_left:.2f}" y1="{y_bottom:.2f}" x2="{x_right:.2f}" y2="{y_bottom:.2f}" stroke="#111" stroke-width="2"/>')
+        if hook_length > 0:
+            # Left hook (upward)
+            cap_rebar.append(f'<line x1="{x_left:.2f}" y1="{y_bottom:.2f}" x2="{x_left:.2f}" y2="{y_bottom - hook_length:.2f}" stroke="#111" stroke-width="2"/>')
+            # Right hook (upward)
+            cap_rebar.append(f'<line x1="{x_right:.2f}" y1="{y_bottom:.2f}" x2="{x_right:.2f}" y2="{y_bottom - hook_length:.2f}" stroke="#111" stroke-width="2"/>')
+
+        # Top mat with downward hooks at ends (X-direction bars shown as lines)
+        y_top = base_y - (data["cap_height"] - data["cover"]) * scale
+        cap_rebar.append(f'<line x1="{x_left:.2f}" y1="{y_top:.2f}" x2="{x_right:.2f}" y2="{y_top:.2f}" stroke="#111" stroke-width="2"/>')
+        if hook_length > 0:
+            # Left hook (downward)
+            cap_rebar.append(f'<line x1="{x_left:.2f}" y1="{y_top:.2f}" x2="{x_left:.2f}" y2="{y_top + hook_length:.2f}" stroke="#111" stroke-width="2"/>')
+            # Right hook (downward)
+            cap_rebar.append(f'<line x1="{x_right:.2f}" y1="{y_top:.2f}" x2="{x_right:.2f}" y2="{y_top + hook_length:.2f}" stroke="#111" stroke-width="2"/>')
+
+        # Y-direction bars shown as circles (perpendicular to elevation view)
+        mat_dot_r = max(3.0, data["mat_bar_diameter"] * scale / 1.5)  # Larger and more visible
+        y_positions_sample = cls.sample_positions(
+            cls.positions_between(data["cap_length"] - 2.0 * data["cover"], data["mat_spacing"]),
+            max_count=7
+        )
+        circle_offset = 3.5  # Closer to horizontal bars
+        edge_inset = 8.0  # Move edge circles inward to avoid hooks
+        for i, y_pos in enumerate(y_positions_sample):
+            x = x0 + data["cover"] * scale + y_pos * scale
+            # Adjust X position for edge circles
+            if i == 0:
+                x += edge_inset  # Move left edge circle to the right
+            elif i == len(y_positions_sample) - 1:
+                x -= edge_inset  # Move right edge circle to the left
+            # Bottom layer Y-direction bars (offset upward from the line)
+            cap_rebar.append(f'<circle cx="{x:.2f}" cy="{y_bottom - circle_offset:.2f}" r="{mat_dot_r:.2f}" fill="#111"/>')
+            # Top layer Y-direction bars (offset downward from the line)
+            cap_rebar.append(f'<circle cx="{x:.2f}" cy="{y_top + circle_offset:.2f}" r="{mat_dot_r:.2f}" fill="#111"/>')
 
         pile_lines = []
         visible_piles = [data["pile_centers"][0], data["pile_centers"][1]]
-        hoop_count = cls._bar_count(data["pile_depth"], data["pile_hoop_spacing"])
+        vertical_top = base_y - cap_h / 2.0  # Pile verticals stop at mid-height of cap
+        pile_bottom = base_y + pile_h  # Bottom of pile
+        total_vertical_height = pile_bottom - vertical_top
+        hoop_count = cls.bar_count(data["pile_depth"] + data["cap_height"] / 2.0, data["pile_hoop_spacing"])
+
         for pile in visible_piles:
             px = x0 + cap_w / 2.0 + pile["x"] * scale
-            pile_lines.append(f'<line x1="{px - pile_r:.2f}" y1="{base_y:.2f}" x2="{px - pile_r:.2f}" y2="{base_y + pile_h:.2f}" stroke="#111" stroke-width="1.4" stroke-dasharray="6 5"/>')
-            pile_lines.append(f'<line x1="{px + pile_r:.2f}" y1="{base_y:.2f}" x2="{px + pile_r:.2f}" y2="{base_y + pile_h:.2f}" stroke="#111" stroke-width="1.4" stroke-dasharray="6 5"/>')
+            # Pile outline (concrete) - only below the cap
+            pile_lines.append(f'<line x1="{px - pile_r:.2f}" y1="{base_y:.2f}" x2="{px - pile_r:.2f}" y2="{pile_bottom:.2f}" stroke="#111" stroke-width="1.4" stroke-dasharray="6 5"/>')
+            pile_lines.append(f'<line x1="{px + pile_r:.2f}" y1="{base_y:.2f}" x2="{px + pile_r:.2f}" y2="{pile_bottom:.2f}" stroke="#111" stroke-width="1.4" stroke-dasharray="6 5"/>')
+
             cage_x = max(2.0, pile_r - data["cover"] * scale)
+            # Vertical bars extend from pile bottom to mid-height of cap
             for side in [-1.0, 1.0]:
-                pile_lines.append(f'<line x1="{px + side * cage_x:.2f}" y1="{base_y - data["cover"] * scale:.2f}" x2="{px + side * cage_x:.2f}" y2="{base_y + pile_h:.2f}" stroke="#111" stroke-width="2"/>')
+                pile_lines.append(f'<line x1="{px + side * cage_x:.2f}" y1="{vertical_top:.2f}" x2="{px + side * cage_x:.2f}" y2="{pile_bottom:.2f}" stroke="#111" stroke-width="2"/>')
+
+            # Circles at top showing vertical bars in cross-section
+            bar_dot_r = max(1.5, data["pile_vertical_diameter"] * scale / 2.0)
+            for side in [-1.0, 1.0]:
+                pile_lines.append(f'<circle cx="{px + side * cage_x:.2f}" cy="{vertical_top:.2f}" r="{bar_dot_r:.2f}" fill="#111"/>')
+
+            # Hoops extend from pile bottom to mid-height of cap
             for index in range(hoop_count):
-                y = base_y + cls._fraction(index, hoop_count) * pile_h
+                y = vertical_top + cls.fraction(index, hoop_count) * total_vertical_height
                 pile_lines.append(f'<line x1="{px - cage_x:.2f}" y1="{y:.2f}" x2="{px + cage_x:.2f}" y2="{y:.2f}" stroke="#111" stroke-width="1"/>')
 
         return f"""
@@ -361,18 +413,18 @@ class Controller(vkt.Controller):
 """
 
     @staticmethod
-    def _fraction(index: int, count: int) -> float:
+    def fraction(index: int, count: int) -> float:
         return index / (count - 1) if count > 1 else 0.5
 
     @staticmethod
-    def _positions_between(span: float, spacing: float) -> list[float]:
+    def positions_between(span: float, spacing: float) -> list[float]:
         count = int(span // spacing) + 1
         if count == 1:
             return [span / 2.0]
         return [index * span / (count - 1) for index in range(count)]
 
     @staticmethod
-    def _sample_positions(values: list[float], max_count: int = 7) -> list[float]:
+    def sample_positions(values: list[float], max_count: int = 7) -> list[float]:
         if len(values) <= max_count:
             return values
 
