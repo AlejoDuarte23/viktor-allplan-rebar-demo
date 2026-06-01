@@ -9,6 +9,7 @@ from pathlib import Path
 ALLPLAN_EXE = Path(r"C:\Program Files\Allplan\Allplan 2026\Prg\Allplan_2026.exe")
 ALLPLAN_LOCAL = Path.home() / "Documents" / "Nemetschek" / "Allplan" / "2026" / "Usr" / "Local"
 ALLPLAN_CLOSE_TIMEOUT_SECONDS = 30
+RESULT_PROJECT_DIR_NAME = "result_project.prj"
 
 
 def log(log_path: Path, message: str) -> None:
@@ -17,61 +18,21 @@ def log(log_path: Path, message: str) -> None:
         file.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
 
 
-def is_process_running(process_name: str) -> bool:
-    """Check if a process is running on Windows."""
-    if os.name != "nt":
-        return False
-
-    result = subprocess.run(
-        ["tasklist", "/FI", f"IMAGENAME eq {process_name}"],
-        capture_output=True,
-        text=True,
-        shell=False,
-    )
-
-    return process_name.lower() in result.stdout.lower()
-
-
-def assert_allplan_is_closed(log_path: Path) -> None:
-    """Verify that Allplan is not running before modifying the template project."""
-    allplan_processes = [
-        "Allplan.exe",
-        "Allmenu.exe",
-    ]
-
-    running_processes = [
-        process_name
-        for process_name in allplan_processes
-        if is_process_running(process_name)
-    ]
-
-    if running_processes:
-        error_message = (
-            "Allplan is still running. Close Allplan before replacing the template project. "
-            f"Running processes: {', '.join(running_processes)}"
-        )
-        log(log_path, error_message)
-        raise RuntimeError(error_message)
-
-    log(log_path, "Verified that Allplan is not running.")
-
-
-
-
 def make_writable(path: str) -> None:
-    """Remove read-only flag from a file or directory."""
     try:
         os.chmod(path, stat.S_IWRITE)
     except (FileNotFoundError, PermissionError):
         pass
 
 
-def remove_readonly_and_retry(function, path, exc_info):
-    """Error handler for shutil.rmtree to handle read-only files."""
+def remove_readonly_and_retry(function, path, exc_info) -> None:
     make_writable(path)
     function(path)
 
 
+def remove_tree(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path, onerror=remove_readonly_and_retry)
 
 
 def stop_launched_allplan(process: subprocess.Popen, log_path: Path) -> None:
@@ -92,30 +53,59 @@ def stop_launched_allplan(process: subprocess.Popen, log_path: Path) -> None:
         log(log_path, f"Allplan process killed with code {process.returncode}.")
 
 
+def install_template_project(template_zip: Path, result_project_dir: Path, log_path: Path) -> Path:
+    extract_dir = template_zip.parent / "_template_project_extract"
+    remove_tree(extract_dir)
+    remove_tree(result_project_dir)
+
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    shutil.unpack_archive(str(template_zip), str(extract_dir), "zip")
+
+    project_candidates = sorted(path for path in extract_dir.iterdir() if path.is_dir() and path.suffix == ".prj")
+    if project_candidates:
+        source_project_dir = project_candidates[0]
+    elif (extract_dir / "Project1.Dat.xml").exists():
+        source_project_dir = extract_dir
+    else:
+        raise RuntimeError(
+            f"Template archive {template_zip} does not contain a .prj folder or Project1.Dat.xml."
+        )
+
+    shutil.copytree(source_project_dir, result_project_dir, copy_function=shutil.copy2)
+    remove_tree(extract_dir)
+
+    project_xml = result_project_dir / "Project1.Dat.xml"
+    if not project_xml.exists():
+        raise FileNotFoundError(f"Copied project is missing Project1.Dat.xml: {project_xml}")
+
+    log(log_path, f"Installed template project at {result_project_dir}.")
+    return project_xml
 
 
 def main() -> None:
     workdir = Path.cwd()
-    template_apn = workdir / "template_project.apn"
+    template_zip = workdir / "template_project.zip"
+    result_project_dir = workdir / RESULT_PROJECT_DIR_NAME
     inputs_path = workdir / "inputs.json"
     pyp_source = workdir / "RebarWorker.pyp"
     py_source = workdir / "RebarWorker.py"
-    output_apn = workdir / "result_project.apn"
+    output_zip = workdir / "result_project.zip"
     output_log = workdir / "worker_log.txt"
 
-    if output_apn.exists():
-        output_apn.unlink()
+    if output_zip.exists():
+        output_zip.unlink()
 
     if output_log.exists():
         output_log.unlink()
 
     log(output_log, "Worker started.")
 
-    if not template_apn.exists():
-        raise FileNotFoundError(f"Template APN file was not found: {template_apn}")
+    if not template_zip.exists():
+        raise FileNotFoundError(f"Template project ZIP was not found: {template_zip}")
 
-    shutil.copy2(template_apn, output_apn)
-    log(output_log, f"Copied APN template from {template_apn} to {output_apn}.")
+    log(output_log, f"Installing template project from {template_zip}.")
+    result_project_xml = install_template_project(template_zip, result_project_dir, output_log)
+    log(output_log, f"Template project ready at {result_project_xml}.")
 
     python_parts_dir = ALLPLAN_LOCAL / "PythonParts" / "ViktorWorker"
     python_scripts_dir = ALLPLAN_LOCAL / "PythonPartsScripts" / "ViktorWorker"
@@ -144,13 +134,14 @@ def main() -> None:
     process = subprocess.Popen(
         [
             str(ALLPLAN_EXE),
-            str(output_apn),
+            "/l",
+            str(result_project_xml),
             "-o",
             f"@{pyp_target}",
         ],
         cwd=str(workdir),
     )
-    log(output_log, f"Started Allplan with PID {process.pid} opening {output_apn}.")
+    log(output_log, f"Started Allplan with PID {process.pid} using project {result_project_xml}.")
 
     try:
         deadline = time.time() + 840
@@ -186,12 +177,15 @@ def main() -> None:
                 file.write("\nPythonPart log:\n")
                 file.write(log_source.read_text(encoding="utf-8"))
 
-        log(output_log, f"Output APN ready at {output_apn}.")
-        log(output_log, "Leaving Allplan open for inspection.")
-    except Exception as error:
-        log(output_log, f"Worker failed with error: {error}")
+        shutil.make_archive(
+            base_name=str(output_zip.with_suffix("")),
+            format="zip",
+            root_dir=str(result_project_dir.parent),
+            base_dir=result_project_dir.name,
+        )
+        log(output_log, f"Created {output_zip}.")
+    finally:
         stop_launched_allplan(process, output_log)
-        raise
 
 
 if __name__ == "__main__":
