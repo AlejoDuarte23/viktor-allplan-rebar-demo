@@ -34,6 +34,10 @@ except ImportError:
 DRAWING_FILE_NUMBER = 1
 
 
+def clean_project_name(value: str) -> str:
+    return str(value or "").strip()
+
+
 def worker_file(file_name: str) -> Path:
     return Path(__file__).with_name(file_name)
 
@@ -141,6 +145,7 @@ def collect_project_context(data: dict, stage: str) -> dict:
         "stage": stage,
         "argv": sys.argv,
         "allplan_settings_available": AllplanSettings is not None,
+        "expected_project_name": worker_context.get("expected_project_name", ""),
         "expected_project_dir": worker_context.get("expected_project_dir", ""),
         "expected_project_xml": worker_context.get("expected_project_xml", ""),
         "expected_project_dir_name": worker_context.get("expected_project_dir_name", ""),
@@ -178,7 +183,12 @@ def collect_project_context(data: dict, stage: str) -> dict:
     return context
 
 
-def project_paths_match(context: dict) -> bool:
+def project_context_matches(context: dict) -> bool:
+    expected_name = clean_project_name(context.get("expected_project_name", ""))
+    current_project_name = clean_project_name(context.get("current_project_name", ""))
+    if expected_name and current_project_name == expected_name:
+        return True
+
     expected_dir = normalize_path(context.get("expected_project_dir", ""))
     expected_xml = normalize_path(context.get("expected_project_xml", ""))
     current_path = normalize_path(context.get("current_project_path", ""))
@@ -193,22 +203,49 @@ def project_paths_match(context: dict) -> bool:
     )
 
 
+def open_expected_project(doc, data: dict, context: dict) -> dict:
+    expected_name = clean_project_name(context.get("expected_project_name", ""))
+    if not expected_name:
+        return context
+
+    current_name = clean_project_name(context.get("current_project_name", ""))
+    if current_name == expected_name:
+        return context
+
+    host_name = clean_project_name(context.get("host_name", "")) or "localhost"
+    log(f"Opening registered Allplan project '{expected_name}' on host '{host_name}'.")
+
+    open_result = AllplanBaseElements.ProjectService.OpenProject(
+        doc,
+        host_name,
+        expected_name,
+    )
+
+    log(f"OpenProject returned: {open_result}")
+    return collect_project_context(data, "after_open_project")
+
+
 def assert_expected_project_context(context: dict) -> None:
     expected_dir = context.get("expected_project_dir", "")
-    if not expected_dir:
+    expected_name = clean_project_name(context.get("expected_project_name", ""))
+    if not expected_dir and not expected_name:
         log("No expected project path was provided; skipping /l context validation.")
         return
 
-    if project_paths_match(context):
-        log(f"Validated active /l project: {context.get('current_project_path', '')}.")
+    if project_context_matches(context):
+        log(
+            "Validated active Allplan project: "
+            f"name='{clean_project_name(context.get('current_project_name', ''))}', "
+            f"path='{context.get('current_project_path', '')}'."
+        )
         return
 
     raise RuntimeError(
         "Allplan is running the PythonPart in the wrong project. "
-        f"Expected active project path '{expected_dir}', "
-        f"but Allplan reported project '{context.get('current_project_name', '')}' "
+        f"Expected project '{expected_name}' at path '{expected_dir}', "
+        f"but Allplan reported project '{clean_project_name(context.get('current_project_name', ''))}' "
         f"at path '{context.get('current_project_path', '')}'. "
-        "Close every running Allplan instance and start the worker again so /l can own the startup project."
+        "Make sure the registered project exists in Allplan project management and is not locked."
     )
 
 
@@ -235,18 +272,21 @@ def create_element(build_ele, doc) -> CreateElementResult:
         result_path = worker_file("result.json")
 
         log(f"Run ID: {run_id}.")
-        context = collect_project_context(data, "before_load_drawing_file")
+        context = collect_project_context(data, "before_open_project")
+        if not project_context_matches(context):
+            context = open_expected_project(doc, data, context)
         assert_expected_project_context(context)
 
         log(f"Loading drawing file {DRAWING_FILE_NUMBER}.")
         load_drawing_file(doc)
         context = collect_project_context(data, "after_load_drawing_file")
+        assert_expected_project_context(context)
 
         log("Creating concrete and reinforcement elements.")
         cap_with_piles = CapWithPiles(data)
         model_elements = cap_with_piles.build()
 
-        result = build_result(data, run_id, context.get("current_project_name", ""))
+        result = build_result(data, run_id, clean_project_name(context.get("current_project_name", "")))
         result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
         log("result.json written.")
 

@@ -10,7 +10,7 @@ The app keeps the flow small and easy to follow:
 
 The Allplan worker creates real reinforcement entities for the cap mats, pile vertical bars, and pile hoops. Mat bars and pile vertical bars can include 90-degree hooks from the VIKTOR inputs.
 
-The worker uses a clean project ZIP template for each run. It extracts the template to a job-local `result_project.prj`, opens it with Allplan's `/l ...\Project1.Dat.xml` startup argument, runs the PythonPart with `-o`, and returns the modified project as `result_project.zip`.
+The worker uses a clean project ZIP template for each run. It resets the registered Allplan project `viktor-template` under `C:\Data\Allplan\Allplan 2026\Prj\viktor-template.prj`, opens it with Allplan's `/l ...\Project1.Dat.xml` startup argument, runs the PythonPart with `-o`, and returns the modified project as `result_project.zip`. The project root and name can be overridden with `ALLPLAN_PROJECTS_DIR` and `ALLPLAN_PROJECT_NAME` on the worker machine.
 
 ![VIKTOR app](assets/viktor-app.png)
 

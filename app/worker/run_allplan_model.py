@@ -9,10 +9,12 @@ from pathlib import Path
 
 ALLPLAN_EXE = Path(r"C:\Program Files\Allplan\Allplan 2026\Prg\Allplan_2026.exe")
 ALLPLAN_LOCAL = Path.home() / "Documents" / "Nemetschek" / "Allplan" / "2026" / "Usr" / "Local"
+ALLPLAN_PROJECTS_DIR = Path(os.environ.get("ALLPLAN_PROJECTS_DIR", r"C:\Data\Allplan\Allplan 2026\Prj"))
 ALLPLAN_PROCESS_NAMES = ("Allplan_2026.exe", "Allplan.exe")
 ALLPLAN_CLOSE_TIMEOUT_SECONDS = 30
 ALLPLAN_WRITEBACK_DELAY_SECONDS = 15
-RESULT_PROJECT_DIR_NAME = "result_project.prj"
+PROJECT_NAME = os.environ.get("ALLPLAN_PROJECT_NAME", "viktor-template")
+PROJECT_DIR = ALLPLAN_PROJECTS_DIR / f"{PROJECT_NAME}.prj"
 
 
 def log(log_path: Path, message: str) -> None:
@@ -147,16 +149,17 @@ def install_template_project(template_zip: Path, result_project_dir: Path, log_p
 def write_worker_inputs(
     inputs_path: Path,
     inputs_target: Path,
-    result_project_dir: Path,
-    result_project_xml: Path,
+    project_dir: Path,
+    project_xml: Path,
 ) -> None:
     with inputs_path.open("r", encoding="utf-8") as file:
         data = json.load(file)
 
     data["_worker_context"] = {
-        "expected_project_dir": str(result_project_dir),
-        "expected_project_xml": str(result_project_xml),
-        "expected_project_dir_name": result_project_dir.name,
+        "expected_project_name": PROJECT_NAME,
+        "expected_project_dir": str(project_dir),
+        "expected_project_xml": str(project_xml),
+        "expected_project_dir_name": project_dir.name,
     }
 
     inputs_target.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -176,7 +179,6 @@ def append_artifact(output_log: Path, artifact_path: Path, title: str) -> None:
 def main() -> None:
     workdir = Path.cwd()
     template_zip = workdir / "template_project.zip"
-    result_project_dir = workdir / RESULT_PROJECT_DIR_NAME
     inputs_path = workdir / "inputs.json"
     pyp_source = workdir / "RebarWorker.pyp"
     py_source = workdir / "RebarWorker.py"
@@ -194,9 +196,11 @@ def main() -> None:
     if not template_zip.exists():
         raise FileNotFoundError(f"Template project ZIP was not found: {template_zip}")
 
+    stop_existing_allplan_processes(output_log)
+
     log(output_log, f"Installing template project from {template_zip}.")
-    result_project_xml = install_template_project(template_zip, result_project_dir, output_log)
-    log(output_log, f"Template project ready at {result_project_xml}.")
+    project_xml = install_template_project(template_zip, PROJECT_DIR, output_log)
+    log(output_log, f"Template project ready at {project_xml}.")
 
     python_parts_dir = ALLPLAN_LOCAL / "PythonParts" / "ViktorWorker"
     python_scripts_dir = ALLPLAN_LOCAL / "PythonPartsScripts" / "ViktorWorker"
@@ -219,11 +223,9 @@ def main() -> None:
 
     shutil.copy2(pyp_source, pyp_target)
     shutil.copy2(py_source, py_target)
-    write_worker_inputs(inputs_path, inputs_target, result_project_dir, result_project_xml)
+    write_worker_inputs(inputs_path, inputs_target, PROJECT_DIR, project_xml)
     log(output_log, f"Copied PythonPart to {pyp_target}.")
     log(output_log, f"Copied script and inputs to {python_scripts_dir}.")
-
-    stop_existing_allplan_processes(output_log)
 
     process = None
 
@@ -232,13 +234,13 @@ def main() -> None:
             [
                 str(ALLPLAN_EXE),
                 "/l",
-                str(result_project_xml),
+                str(project_xml),
                 "-o",
                 f"@{pyp_target}",
             ],
             cwd=str(workdir),
         )
-        log(output_log, f"Started Allplan with PID {process.pid} using project {result_project_xml}.")
+        log(output_log, f"Started Allplan with PID {process.pid} using project {project_xml}.")
 
         deadline = time.time() + 840
         while not done_marker.exists():
@@ -279,8 +281,8 @@ def main() -> None:
         shutil.make_archive(
             base_name=str(output_zip.with_suffix("")),
             format="zip",
-            root_dir=str(result_project_dir.parent),
-            base_dir=result_project_dir.name,
+            root_dir=str(PROJECT_DIR.parent),
+            base_dir=PROJECT_DIR.name,
         )
         log(output_log, f"Created {output_zip}.")
         log(output_log, f"Leaving launched Allplan process open for inspection. PID: {process.pid}.")
