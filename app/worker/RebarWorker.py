@@ -229,7 +229,7 @@ def assert_expected_project_context(context: dict) -> None:
     expected_dir = context.get("expected_project_dir", "")
     expected_name = clean_project_name(context.get("expected_project_name", ""))
     if not expected_dir and not expected_name:
-        log("No expected project path was provided; skipping /l context validation.")
+        log("No expected project was provided; skipping project context validation.")
         return
 
     if project_context_matches(context):

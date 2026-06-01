@@ -69,7 +69,7 @@ def stop_existing_allplan_processes(log_path: Path) -> None:
         log(log_path, "Skipping Allplan process cleanup outside Windows.")
         return
 
-    log(log_path, "Closing existing Allplan processes before launching the /l project.")
+    log(log_path, "Closing existing Allplan processes before resetting the registered project.")
 
     for process_name in ALLPLAN_PROCESS_NAMES:
         if is_process_running(process_name, log_path):
@@ -93,34 +93,10 @@ def stop_existing_allplan_processes(log_path: Path) -> None:
             run_windows_command(["taskkill", "/F", "/IM", process_name, "/T"], log_path)
 
 
-def stop_launched_allplan(process: subprocess.Popen, log_path: Path) -> None:
-    if process.poll() is not None:
-        log(log_path, f"Allplan process already exited with code {process.returncode}.")
-        return
-
-    log(log_path, f"Stopping launched Allplan process with PID {process.pid}.")
-    if os.name == "nt":
-        run_windows_command(["taskkill", "/PID", str(process.pid), "/T"], log_path)
-    else:
-        process.terminate()
-
-    try:
-        process.wait(timeout=ALLPLAN_CLOSE_TIMEOUT_SECONDS)
-        log(log_path, f"Allplan process exited with code {process.returncode}.")
-    except subprocess.TimeoutExpired:
-        log(log_path, "Allplan did not exit after terminate; killing process.")
-        if os.name == "nt":
-            run_windows_command(["taskkill", "/F", "/PID", str(process.pid), "/T"], log_path)
-        else:
-            process.kill()
-        process.wait(timeout=10)
-        log(log_path, f"Allplan process killed with code {process.returncode}.")
-
-
-def install_template_project(template_zip: Path, result_project_dir: Path, log_path: Path) -> Path:
+def install_template_project(template_zip: Path, project_dir: Path, log_path: Path) -> Path:
     extract_dir = template_zip.parent / "_template_project_extract"
     remove_tree(extract_dir)
-    remove_tree(result_project_dir)
+    remove_tree(project_dir)
 
     extract_dir.mkdir(parents=True, exist_ok=True)
     shutil.unpack_archive(str(template_zip), str(extract_dir), "zip")
@@ -135,14 +111,14 @@ def install_template_project(template_zip: Path, result_project_dir: Path, log_p
             f"Template archive {template_zip} does not contain a .prj folder or Project1.Dat.xml."
         )
 
-    shutil.copytree(source_project_dir, result_project_dir, copy_function=shutil.copy2)
+    shutil.copytree(source_project_dir, project_dir, copy_function=shutil.copy2)
     remove_tree(extract_dir)
 
-    project_xml = result_project_dir / "Project1.Dat.xml"
+    project_xml = project_dir / "Project1.Dat.xml"
     if not project_xml.exists():
         raise FileNotFoundError(f"Copied project is missing Project1.Dat.xml: {project_xml}")
 
-    log(log_path, f"Installed template project at {result_project_dir}.")
+    log(log_path, f"Installed template project at {project_dir}.")
     return project_xml
 
 
